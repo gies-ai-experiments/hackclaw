@@ -79,6 +79,29 @@ if DISCORD_AVAILABLE:
         async def on_message(self, message: discord.Message) -> None:
             await self._channel._handle_discord_message(message)
 
+        async def setup_hook(self) -> None:
+            from nanobot.helpqueue.views import ClaimView
+            self.add_view(ClaimView(""))
+
+        async def on_interaction(self, interaction: discord.Interaction) -> None:
+            if interaction.type != discord.InteractionType.component:
+                return
+            custom_id = interaction.data.get("custom_id", "") if interaction.data else ""
+            if not custom_id.startswith("helpqueue:"):
+                return
+            ticket_id = None
+            if interaction.message and interaction.message.embeds:
+                title = interaction.message.embeds[0].title or ""
+                ticket_id = title.split(" — ")[0].strip() if " — " in title else None
+            if not ticket_id:
+                await interaction.response.send_message("Could not identify the ticket.", ephemeral=True)
+                return
+            from nanobot.helpqueue.handler import handle_claim, handle_unclaim
+            if custom_id == "helpqueue:claim":
+                await handle_claim(interaction, ticket_id)
+            elif custom_id == "helpqueue:unclaim":
+                await handle_unclaim(interaction, ticket_id)
+
         async def _reply_ephemeral(self, interaction: discord.Interaction, text: str) -> bool:
             """Send an ephemeral interaction response and report success."""
             try:
@@ -140,6 +163,18 @@ if DISCORD_AVAILABLE:
                     await self._reply_ephemeral(interaction, "You are not allowed to use this bot.")
                     return
                 await self._reply_ephemeral(interaction, build_help_text())
+
+            @self.tree.command(name="helpme", description="Request help from a technical mentor")
+            async def helpme_command(interaction: discord.Interaction) -> None:
+                from nanobot.helpqueue.handler import helpme_flow
+                cfg = self._channel.config.help_queue
+                await helpme_flow(interaction, cfg.channel_id, cfg.mentor_role_id)
+
+            @self.tree.command(name="resolved", description="Mark your help request as resolved")
+            async def resolved_command(interaction: discord.Interaction) -> None:
+                from nanobot.helpqueue.handler import handle_resolve_command
+                cfg = self._channel.config.help_queue
+                await handle_resolve_command(interaction, help_queue_channel_id=cfg.channel_id)
 
             @self.tree.error
             async def on_app_command_error(
