@@ -38,9 +38,11 @@ Technical mentors provide **hands-on guidance** on no-code/low-code AI tools, he
 
 ### How to Get Help
 
+- **Type `/helpme` in your team's Discord channel** — the bot will ask where you are and what you need help with, then notify a mentor who will come to you
 - Find a mentor in your hacking room
 - Ask in the Discord (hackclaw bot can help with common questions)
 - Attend champion office hours for domain-specific guidance
+- **Type `/resolved` when your issue is solved** to close the help request
 
 ---
 
