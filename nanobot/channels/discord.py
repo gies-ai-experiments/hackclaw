@@ -34,6 +34,14 @@ MAX_MESSAGE_LEN = 2000  # Discord message character limit
 TYPING_INTERVAL_S = 8
 
 
+class HelpQueueConfig(Base):
+    """Configuration for the help ticket queue."""
+
+    channel_id: str = ""          # #help-queue channel ID
+    mentor_role_id: str = ""      # @TechMentor role ID
+    reminder_minutes: int = 10    # Re-ping if unclaimed after N minutes
+
+
 class DiscordConfig(Base):
     """Discord channel configuration."""
 
@@ -45,6 +53,7 @@ class DiscordConfig(Base):
     read_receipt_emoji: str = "👀"
     working_emoji: str = "🔧"
     working_emoji_delay: float = 2.0
+    help_queue: HelpQueueConfig = Field(default_factory=HelpQueueConfig)
 
 
 if DISCORD_AVAILABLE:
