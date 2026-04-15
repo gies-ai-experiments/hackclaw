@@ -172,3 +172,175 @@ class FollowUpView(discord.ui.View):
 
     async def on_timeout(self) -> None:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Organizer dashboard
+# ---------------------------------------------------------------------------
+
+
+def build_dashboard_embed(
+    open_count: int,
+    claimed_count: int,
+    resolved_count: int,
+    team_count: int,
+) -> discord.Embed:
+    """Build the organizer dashboard embed."""
+    embed = discord.Embed(
+        title="Hackclaw Organizer Dashboard",
+        colour=discord.Colour(0x9B59B6),
+    )
+    embed.add_field(
+        name="Help Queue",
+        value=(
+            f"\U0001f7e0 Open: **{open_count}**\n"
+            f"\U0001f535 Claimed: **{claimed_count}**\n"
+            f"\U0001f7e2 Resolved: **{resolved_count}**"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name="Team Channels",
+        value=f"**{team_count}** teams found",
+        inline=True,
+    )
+    return embed
+
+
+class DashboardView(discord.ui.View):
+    """Organizer dashboard with team channel join/leave and ticket stats."""
+
+    def __init__(
+        self,
+        team_channels: list[tuple[str, str]],
+        teams_category_id: str,
+        help_queue_channel_id: str,
+        mentor_role_id: str,
+    ) -> None:
+        super().__init__(timeout=300)
+        self.teams_category_id = teams_category_id
+        self.help_queue_channel_id = help_queue_channel_id
+        self.mentor_role_id = mentor_role_id
+        self.selected_channel_id: str | None = None
+
+        # Build select menu from team channels
+        if team_channels:
+            options = [
+                discord.SelectOption(label=name, value=cid)
+                for cid, name in team_channels[:25]  # Discord max 25 options
+            ]
+        else:
+            options = [discord.SelectOption(label="No teams found", value="none")]
+
+        self.channel_select.options = options
+
+    @discord.ui.select(placeholder="Select a team channel...")
+    async def channel_select(
+        self, interaction: discord.Interaction, select: discord.ui.Select,
+    ) -> None:
+        self.selected_channel_id = select.values[0] if select.values else None
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Join", style=discord.ButtonStyle.success, row=2)
+    async def join_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button,
+    ) -> None:
+        if not self.selected_channel_id or self.selected_channel_id == "none":
+            await interaction.response.send_message(
+                "Select a team channel first.", ephemeral=True,
+            )
+            return
+        try:
+            channel = interaction.client.get_channel(int(self.selected_channel_id))
+            if channel is None:
+                channel = await interaction.client.fetch_channel(
+                    int(self.selected_channel_id),
+                )
+            await channel.set_permissions(
+                interaction.user,
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
+                reason="Organizer joined via dashboard",
+            )
+            await interaction.response.send_message(
+                f"Joined <#{self.selected_channel_id}>!", ephemeral=True,
+            )
+        except Exception as e:
+            await interaction.response.send_message(
+                f"Failed to join: {e}", ephemeral=True,
+            )
+
+    @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary, row=2)
+    async def leave_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button,
+    ) -> None:
+        if not self.selected_channel_id or self.selected_channel_id == "none":
+            await interaction.response.send_message(
+                "Select a team channel first.", ephemeral=True,
+            )
+            return
+        try:
+            channel = interaction.client.get_channel(int(self.selected_channel_id))
+            if channel is None:
+                channel = await interaction.client.fetch_channel(
+                    int(self.selected_channel_id),
+                )
+            guild = channel.guild
+            member = guild.get_member(interaction.user.id)
+            if member is None:
+                member = await guild.fetch_member(interaction.user.id)
+            await channel.set_permissions(
+                member, overwrite=None, reason="Organizer left via dashboard",
+            )
+            await interaction.response.send_message(
+                f"Left <#{self.selected_channel_id}>.", ephemeral=True,
+            )
+        except Exception as e:
+            await interaction.response.send_message(
+                f"Failed to leave: {e}", ephemeral=True,
+            )
+
+    @discord.ui.button(
+        label="Refresh", style=discord.ButtonStyle.primary, emoji="\U0001f504", row=2,
+    )
+    async def refresh_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button,
+    ) -> None:
+        from nanobot.helpqueue.handler import get_store
+
+        store = get_store()
+
+        # Recount tickets
+        open_count = sum(
+            1 for t in store._tickets.values() if t.status == "open"
+        )
+        claimed_count = sum(
+            1 for t in store._tickets.values() if t.status == "claimed"
+        )
+        resolved_count = sum(
+            1 for t in store._tickets.values() if t.status == "resolved"
+        )
+
+        # Refetch team channels from category
+        guild = interaction.guild
+        team_channels: list[tuple[str, str]] = []
+        if guild:
+            category = guild.get_channel(int(self.teams_category_id))
+            if category:
+                team_channels = [
+                    (str(ch.id), ch.name)
+                    for ch in category.channels
+                    if isinstance(ch, discord.TextChannel)
+                ]
+
+        embed = build_dashboard_embed(
+            open_count, claimed_count, resolved_count, len(team_channels),
+        )
+        new_view = DashboardView(
+            team_channels=team_channels,
+            teams_category_id=self.teams_category_id,
+            help_queue_channel_id=self.help_queue_channel_id,
+            mentor_role_id=self.mentor_role_id,
+        )
+        await interaction.response.edit_message(embed=embed, view=new_view)

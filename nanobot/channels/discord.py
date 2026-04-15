@@ -182,6 +182,47 @@ if DISCORD_AVAILABLE:
                 cfg = self._channel.config.help_queue
                 await handle_resolve_command(interaction, help_queue_channel_id=cfg.channel_id)
 
+            @self.tree.command(name="dashboard", description="Show the organizer dashboard")
+            async def dashboard_command(interaction: discord.Interaction) -> None:
+                ORGANIZING_CHANNEL_ID = "1493801335831789568"
+                TEAMS_CATEGORY_ID = "1493806352139817172"
+
+                if str(interaction.channel_id) != ORGANIZING_CHANNEL_ID:
+                    await interaction.response.send_message(
+                        "This command can only be used in the organizing team channel.",
+                        ephemeral=True,
+                    )
+                    return
+
+                from nanobot.helpqueue.handler import get_store
+                from nanobot.helpqueue.views import DashboardView, build_dashboard_embed
+
+                store = get_store()
+                open_count = sum(1 for t in store._tickets.values() if t.status == "open")
+                claimed_count = sum(1 for t in store._tickets.values() if t.status == "claimed")
+                resolved_count = sum(1 for t in store._tickets.values() if t.status == "resolved")
+
+                # Get team channels from category
+                team_channels = []
+                if interaction.guild:
+                    category = interaction.guild.get_channel(int(TEAMS_CATEGORY_ID))
+                    if category:
+                        team_channels = [
+                            (str(ch.id), ch.name)
+                            for ch in category.channels
+                            if isinstance(ch, discord.TextChannel)
+                        ]
+
+                cfg = self._channel.config.help_queue
+                embed = build_dashboard_embed(open_count, claimed_count, resolved_count, len(team_channels))
+                view = DashboardView(
+                    team_channels=team_channels,
+                    teams_category_id=TEAMS_CATEGORY_ID,
+                    help_queue_channel_id=cfg.channel_id,
+                    mentor_role_id=cfg.mentor_role_id,
+                )
+                await interaction.response.send_message(embed=embed, view=view)
+
             @self.tree.error
             async def on_app_command_error(
                 interaction: discord.Interaction,
@@ -398,10 +439,14 @@ class DiscordChannel(BaseChannel):
             if copilot_content:
                 metadata["_knowledge_override"] = (
                     "# Copilot Studio Expert\n\n"
-                    "You are the Copilot Studio expert for this hackathon. "
-                    "Answer ONLY using the textbook below. "
+                    "You are **hackclaw**, the Copilot Studio expert for the "
+                    "Gies AI for Impact Challenge hackathon. "
+                    "When asked to introduce yourself, say who you are and that you help "
+                    "hackathon participants with Microsoft Copilot Studio questions.\n\n"
+                    "Answer questions using the textbook below. "
                     "Do NOT use general knowledge or other sources. "
-                    "If the question is not about Microsoft Copilot Studio, politely say: "
+                    "If the question is not about Microsoft Copilot Studio "
+                    "and is not a greeting or self-introduction, politely say: "
                     "'This channel is for Copilot Studio questions only. "
                     "For other questions, ask me in your team channel or the general channel.'\n\n"
                     "Keep answers concise and practical for hackathon participants.\n\n"
