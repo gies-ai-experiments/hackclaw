@@ -9,15 +9,90 @@ Expected column layout (25 columns, 0-based):
     14-17: Member 3
     18-21: Member 4
     22-24: Business Focus Area, Tool Comfort, Agreement (ignored)
+
+Eligibility:
+    The Gies AI for Impact Challenge is open only to Gies College of Business
+    students.  :func:`parse_teams_csv` validates each member's declared program
+    against :data:`GIES_PROGRAM_KEYWORDS` and, by default, filters out anyone
+    who does not look like a Gies student.  Teams that end up with zero eligible
+    members are dropped entirely.
 """
 
 from __future__ import annotations
 
 import csv
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from loguru import logger
+
+# ---------------------------------------------------------------------------
+# Gies College of Business program whitelist
+# ---------------------------------------------------------------------------
+
+# Canonical list of program / major keywords that indicate a student is
+# enrolled in the Gies College of Business at UIUC.  Matching is case
+# insensitive and uses word boundaries, so short abbreviations (e.g. "IS",
+# "MBA") only match when they appear as whole words.  Extend this list when
+# new Gies degree programs appear on the registration form.
+GIES_PROGRAM_KEYWORDS: frozenset[str] = frozenset(
+    {
+        # Undergraduate majors
+        "accountancy",
+        "accounting",
+        "accy",
+        "finance",
+        "fin",
+        "information systems",
+        "mis",
+        "is",
+        "marketing",
+        "management",
+        "mgmt",
+        "operations management",
+        "operations",
+        "supply chain management",
+        "supply chain",
+        "scm",
+        "strategy",
+        "entrepreneurship",
+        "business administration",
+        "business analytics",
+        "badm",
+        "business",
+        # Graduate degrees
+        "mba",
+        "msa",
+        "msf",
+        "msba",
+        "master of accountancy",
+        "master of finance",
+        "master of business",
+        "technology management",
+        # Catch-all / college name
+        "gies",
+    }
+)
+
+# Pre-compiled whole-word matchers for every keyword above.  Using
+# ``\b`` keeps abbreviations like "IS" from matching inside words such as
+# "Visual" or "Physics".
+_GIES_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(rf"\b{re.escape(kw)}\b", re.IGNORECASE) for kw in GIES_PROGRAM_KEYWORDS
+)
+
+
+def is_gies_program(program: str) -> bool:
+    """Return ``True`` when *program* looks like a Gies College program.
+
+    The check is deliberately permissive: it matches any whole-word Gies
+    keyword (see :data:`GIES_PROGRAM_KEYWORDS`) anywhere inside the field.
+    Empty or whitespace-only strings return ``False``.
+    """
+    if not program or not program.strip():
+        return False
+    return any(pattern.search(program) for pattern in _GIES_PATTERNS)
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -26,10 +101,17 @@ from loguru import logger
 
 @dataclass(frozen=True)
 class Member:
-    """A single team member with name and email."""
+    """A single team member parsed from the registration form."""
 
     name: str
     email: str
+    program: str = ""
+    academic_year: str = ""
+
+    @property
+    def is_gies(self) -> bool:
+        """``True`` when this member's program looks like a Gies program."""
+        return is_gies_program(self.program)
 
 
 @dataclass
@@ -37,7 +119,19 @@ class Team:
     """A hackathon team consisting of a name and its members."""
 
     name: str
-    members: list[Member]
+    members: list[Member] = field(default_factory=list)
+
+    def gies_members(self) -> list[Member]:
+        """Return the subset of members enrolled in Gies."""
+        return [m for m in self.members if m.is_gies]
+
+    def non_gies_members(self) -> list[Member]:
+        """Return the subset of members who are **not** Gies students."""
+        return [m for m in self.members if not m.is_gies]
+
+    def is_all_gies(self) -> bool:
+        """``True`` when the team has members and every one is Gies-eligible."""
+        return bool(self.members) and all(m.is_gies for m in self.members)
 
 
 # ---------------------------------------------------------------------------
@@ -55,11 +149,20 @@ _MAX_MEMBERS = 4
 # ---------------------------------------------------------------------------
 
 
-def parse_teams_csv(csv_path: str) -> list[Team]:
+def parse_teams_csv(csv_path: str, *, gies_only: bool = True) -> list[Team]:
     """Read *csv_path* and return a list of :class:`Team` objects.
 
     Rows with an empty team name are silently skipped.  Within each row,
     member slots whose name **or** email is empty are also skipped.
+
+    Args:
+        csv_path: Path to the Google Forms CSV export.
+        gies_only: When ``True`` (the default), members whose declared program
+            does not match any Gies keyword are logged as a warning and
+            filtered out.  Teams that end up with zero eligible members after
+            filtering are dropped entirely.  When ``False``, every member is
+            retained and no eligibility filtering is performed — useful for
+            diagnostics or downstream custom validation.
     """
     teams: list[Team] = []
 
@@ -74,6 +177,30 @@ def parse_teams_csv(csv_path: str) -> list[Team]:
                 continue
 
             members = _extract_members(row)
+
+            if gies_only:
+                eligible: list[Member] = []
+                for member in members:
+                    if member.is_gies:
+                        eligible.append(member)
+                    else:
+                        logger.warning(
+                            "Row {}: team={!r} member={!r} program={!r} is not a "
+                            "Gies College of Business program — excluded",
+                            row_num,
+                            team_name,
+                            member.name,
+                            member.program,
+                        )
+                if not eligible:
+                    logger.warning(
+                        "Row {}: team={!r} has no Gies-eligible members — team skipped",
+                        row_num,
+                        team_name,
+                    )
+                    continue
+                members = eligible
+
             teams.append(Team(name=team_name, members=members))
             logger.debug(
                 "Row {}: team={!r} members={}",
@@ -82,7 +209,12 @@ def parse_teams_csv(csv_path: str) -> list[Team]:
                 len(members),
             )
 
-    logger.info("Parsed {} team(s) from {}", len(teams), csv_path)
+    logger.info(
+        "Parsed {} team(s) from {} (gies_only={})",
+        len(teams),
+        csv_path,
+        gies_only,
+    )
     return teams
 
 
@@ -115,10 +247,20 @@ def _extract_members(row: list[str]) -> list[Member]:
     members: list[Member] = []
     for i in range(_MAX_MEMBERS):
         base = _MEMBER_START_COL + i * _MEMBER_SLOTS
-        if base + 1 >= len(row):
+        # Need all 4 member columns (name, email, program, year) to be addressable.
+        if base + 3 >= len(row):
             break
         name = row[base].strip()
         email = row[base + 1].strip()
+        program = row[base + 2].strip()
+        academic_year = row[base + 3].strip()
         if name and email:
-            members.append(Member(name=name, email=email))
+            members.append(
+                Member(
+                    name=name,
+                    email=email,
+                    program=program,
+                    academic_year=academic_year,
+                )
+            )
     return members

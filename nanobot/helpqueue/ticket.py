@@ -23,6 +23,7 @@ class HelpTicket:
     claimed_at: datetime | None = None
     resolved_at: datetime | None = None
     queue_message_id: int | None = None
+    solution: str | None = None
 
 
 class TicketStore:

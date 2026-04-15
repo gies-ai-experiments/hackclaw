@@ -70,11 +70,29 @@ if DISCORD_AVAILABLE:
         async def on_ready(self) -> None:
             self._channel._bot_user_id = str(self.user.id) if self.user else None
             logger.info("Discord bot connected as user {}", self._channel._bot_user_id)
+            # Set bot nickname to "hackclaw" in each guild
+            for guild in self.guilds:
+                try:
+                    if guild.me and guild.me.nick != "hackclaw":
+                        await guild.me.edit(nick="hackclaw")
+                        logger.info("Set bot nickname to 'hackclaw' in guild {}", guild.id)
+                except Exception as e:
+                    logger.warning("Failed to set nickname in guild {}: {}", guild.id, e)
+            # Sync commands to each guild first (instant availability)
+            for guild in self.guilds:
+                try:
+                    self.tree.copy_global_to(guild=guild)
+                    guild_synced = await self.tree.sync(guild=guild)
+                    logger.info("Discord app commands synced to guild {}: {}", guild.id, len(guild_synced))
+                except Exception as e:
+                    logger.warning("Discord guild sync failed for {}: {}", guild.id, e)
+            # Clear global commands to avoid duplicates
+            self.tree.clear_commands(guild=None)
             try:
-                synced = await self.tree.sync()
-                logger.info("Discord app commands synced: {}", len(synced))
+                await self.tree.sync()
+                logger.info("Discord global commands cleared")
             except Exception as e:
-                logger.warning("Discord app command sync failed: {}", e)
+                logger.warning("Failed to clear global commands: {}", e)
 
         async def on_message(self, message: discord.Message) -> None:
             await self._channel._handle_discord_message(message)
@@ -96,11 +114,14 @@ if DISCORD_AVAILABLE:
             if not ticket_id:
                 await interaction.response.send_message("Could not identify the ticket.", ephemeral=True)
                 return
-            from nanobot.helpqueue.handler import handle_claim, handle_unclaim
+            from nanobot.helpqueue.handler import handle_claim, handle_resolve_button, handle_unclaim
             if custom_id == "helpqueue:claim":
                 await handle_claim(interaction, ticket_id)
             elif custom_id == "helpqueue:unclaim":
                 await handle_unclaim(interaction, ticket_id)
+            elif custom_id == "helpqueue:resolve":
+                cfg = self._channel.config.help_queue
+                await handle_resolve_button(interaction, ticket_id, cfg.channel_id)
 
         async def _reply_ephemeral(self, interaction: discord.Interaction, text: str) -> bool:
             """Send an ephemeral interaction response and report success."""
@@ -141,34 +162,19 @@ if DISCORD_AVAILABLE:
             )
 
         def _register_app_commands(self) -> None:
-            commands = (
-                ("new", "Start a new conversation", "/new"),
-                ("stop", "Stop the current task", "/stop"),
-                ("restart", "Restart the bot", "/restart"),
-                ("status", "Show bot status", "/status"),
-            )
-
-            for name, description, command_text in commands:
-                @self.tree.command(name=name, description=description)
-                async def command_handler(
-                    interaction: discord.Interaction,
-                    _command_text: str = command_text,
-                ) -> None:
-                    await self._forward_slash_command(interaction, _command_text)
-
-            @self.tree.command(name="help", description="Show available commands")
-            async def help_command(interaction: discord.Interaction) -> None:
-                sender_id = str(interaction.user.id)
-                if not self._channel.is_allowed(sender_id):
-                    await self._reply_ephemeral(interaction, "You are not allowed to use this bot.")
-                    return
-                await self._reply_ephemeral(interaction, build_help_text())
-
             @self.tree.command(name="helpme", description="Request help from a technical mentor")
-            async def helpme_command(interaction: discord.Interaction) -> None:
-                from nanobot.helpqueue.handler import helpme_flow
+            @app_commands.describe(
+                location="Where are you? (e.g., BIF 2007, Wohlers 215)",
+                problem="What do you need help with?",
+            )
+            async def helpme_command(
+                interaction: discord.Interaction,
+                location: str,
+                problem: str,
+            ) -> None:
+                from nanobot.helpqueue.handler import helpme_instant
                 cfg = self._channel.config.help_queue
-                await helpme_flow(interaction, cfg.channel_id, cfg.mentor_role_id)
+                await helpme_instant(interaction, location, problem, cfg.channel_id, cfg.mentor_role_id)
 
             @self.tree.command(name="resolved", description="Mark your help request as resolved")
             async def resolved_command(interaction: discord.Interaction) -> None:
@@ -380,6 +386,29 @@ class DiscordChannel(BaseChannel):
         full_content = self._compose_inbound_content(content, attachment_markers)
         metadata = self._build_inbound_metadata(message)
 
+        # Copilot Studio channel: replace system prompt knowledge with copilot textbook only
+        COPILOT_CHANNEL_ID = "1493684284332965978"
+        if channel_id == COPILOT_CHANNEL_ID:
+            copilot_path = Path(__file__).resolve().parent.parent.parent / "brain" / "copilot-studio.md"
+            try:
+                copilot_content = copilot_path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                copilot_content = ""
+                logger.warning("Copilot textbook not found at {}", copilot_path)
+            if copilot_content:
+                metadata["_knowledge_override"] = (
+                    "# Copilot Studio Expert\n\n"
+                    "You are the Copilot Studio expert for this hackathon. "
+                    "Answer ONLY using the textbook below. "
+                    "Do NOT use general knowledge or other sources. "
+                    "If the question is not about Microsoft Copilot Studio, politely say: "
+                    "'This channel is for Copilot Studio questions only. "
+                    "For other questions, ask me in your team channel or the general channel.'\n\n"
+                    "Keep answers concise and practical for hackathon participants.\n\n"
+                    "---\n\n"
+                    f"# Copilot Studio Textbook\n\n{copilot_content}"
+                )
+
         await self._start_typing(message.channel)
 
         # Add read receipt reaction immediately, working emoji after delay
@@ -476,6 +505,11 @@ class DiscordChannel(BaseChannel):
 
     def _should_respond_in_group(self, message: discord.Message, content: str) -> bool:
         """Check if the bot should respond in a guild channel based on policy."""
+        # Always respond in the Copilot Studio channel (no @mention needed)
+        COPILOT_CHANNEL_ID = "1493684284332965978"
+        if str(message.channel.id) == COPILOT_CHANNEL_ID:
+            return True
+
         if self.config.group_policy == "open":
             return True
 

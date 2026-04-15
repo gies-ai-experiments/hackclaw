@@ -571,11 +571,13 @@ class AgentLoop:
                 message_tool.start_turn()
 
         history = session.get_history(max_messages=0)
+        knowledge_override = (msg.metadata or {}).get("_knowledge_override")
         initial_messages = self.context.build_messages(
             history=history,
             current_message=msg.content,
             media=msg.media if msg.media else None,
             channel=msg.channel, chat_id=msg.chat_id,
+            knowledge_override=knowledge_override,
         )
 
         async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:

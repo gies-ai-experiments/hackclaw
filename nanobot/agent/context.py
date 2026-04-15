@@ -26,13 +26,26 @@ class ContextBuilder:
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace)
 
-    def build_system_prompt(self, skill_names: list[str] | None = None) -> str:
-        """Build the system prompt from identity, bootstrap files, memory, and skills."""
+    def build_system_prompt(
+        self,
+        skill_names: list[str] | None = None,
+        knowledge_override: str | None = None,
+    ) -> str:
+        """Build the system prompt from identity, bootstrap files, memory, and skills.
+
+        Args:
+            skill_names: Optional list of skill names to include.
+            knowledge_override: If provided, replaces AGENTS.md bootstrap content
+                with this string (used for channel-specific knowledge scoping).
+        """
         parts = [self._get_identity()]
 
-        bootstrap = self._load_bootstrap_files()
-        if bootstrap:
-            parts.append(bootstrap)
+        if knowledge_override:
+            parts.append(knowledge_override)
+        else:
+            bootstrap = self._load_bootstrap_files()
+            if bootstrap:
+                parts.append(bootstrap)
 
         memory = self.memory.get_memory_context()
         if memory:
@@ -108,6 +121,7 @@ class ContextBuilder:
         channel: str | None = None,
         chat_id: str | None = None,
         current_role: str = "user",
+        knowledge_override: str | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
         runtime_ctx = self._build_runtime_context(channel, chat_id, self.timezone)
@@ -120,7 +134,7 @@ class ContextBuilder:
         else:
             merged = [{"type": "text", "text": runtime_ctx}] + user_content
         messages = [
-            {"role": "system", "content": self.build_system_prompt(skill_names)},
+            {"role": "system", "content": self.build_system_prompt(skill_names, knowledge_override=knowledge_override)},
             *history,
         ]
         if messages[-1].get("role") == current_role:

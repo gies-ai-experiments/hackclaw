@@ -24,3 +24,4 @@ A **24-hour hackathon** at Gies College of Business (University of Illinois) whe
 | Food & Logistics | [logistics.md](./logistics.md) | Meals, snacks, overnight info |
 | Workshops | [workshops.md](./workshops.md) | Pre-event preparation and workshop links |
 | FAQ | [faq.md](./faq.md) | Common participant questions |
+| Copilot Studio Textbook | [copilot-studio.md](./copilot-studio.md) | Complete guide to building AI agents with Microsoft Copilot Studio — setup, features, topics, triggers, actions, knowledge sources, publishing, testing, best practices, use cases, limitations, and hackathon tips |
