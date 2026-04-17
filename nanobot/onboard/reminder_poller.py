@@ -11,14 +11,18 @@ the design rationale.
 
 from __future__ import annotations
 
+import smtplib
+import ssl
 from collections.abc import Iterable
 from dataclasses import dataclass
+from email.message import EmailMessage
 from enum import Enum
 
 from loguru import logger
 
 from nanobot.onboard.email_canonical import canonical_illinois_email
 from nanobot.onboard.parser import extract_members, is_gies_program
+from nanobot.onboard.templates import RenderedEmail
 
 
 class Action(str, Enum):
@@ -112,6 +116,40 @@ def parse_interest_row(row_index: int, raw: list[str]) -> InterestRow:
         reminder_count=reminder_count,
         not_eligible_sent_at=_cell(raw, INTEREST_COL_NOT_ELIGIBLE_AT),
     )
+
+
+@dataclass(frozen=True)
+class SMTPSettings:
+    """SMTP credentials. Sourced from ``config.json -> channels.email``."""
+
+    host: str
+    port: int
+    username: str
+    password: str
+    from_address: str
+    use_tls: bool = True
+    use_ssl: bool = False
+
+
+def send_email(*, to_email: str, rendered: RenderedEmail, smtp: SMTPSettings) -> None:
+    """Send a rendered email via SMTP. Raises on transport failure."""
+    msg = EmailMessage()
+    msg["From"] = smtp.from_address or smtp.username
+    msg["To"] = to_email
+    msg["Subject"] = rendered.subject
+    msg.set_content(rendered.body)
+
+    timeout = 30
+    if smtp.use_ssl:
+        with smtplib.SMTP_SSL(smtp.host, smtp.port, timeout=timeout) as conn:
+            conn.login(smtp.username, smtp.password)
+            conn.send_message(msg)
+        return
+    with smtplib.SMTP(smtp.host, smtp.port, timeout=timeout) as conn:
+        if smtp.use_tls:
+            conn.starttls(context=ssl.create_default_context())
+        conn.login(smtp.username, smtp.password)
+        conn.send_message(msg)
 
 
 def build_applied_set(rows: Iterable[list[str]]) -> set[str]:

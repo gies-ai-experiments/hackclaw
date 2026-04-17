@@ -128,3 +128,38 @@ def test_parse_interest_row_garbage_count_defaults_zero() -> None:
     raw = _interest(count="not-a-number")
     row = parse_interest_row(4, raw)
     assert row.reminder_count == 0
+
+
+from unittest.mock import MagicMock, patch
+
+from nanobot.onboard.reminder_poller import SMTPSettings, send_email
+from nanobot.onboard.templates import RenderedEmail
+
+
+@patch("nanobot.onboard.reminder_poller.smtplib.SMTP")
+def test_send_email_starttls(mock_smtp_cls: MagicMock) -> None:
+    mock_conn = MagicMock()
+    mock_smtp_cls.return_value.__enter__.return_value = mock_conn
+
+    send_email(
+        to_email="alice@illinois.edu",
+        rendered=RenderedEmail(subject="Hi", body="Body\n"),
+        smtp=SMTPSettings(
+            host="smtp.gmail.com",
+            port=587,
+            username="bot@gmail.com",
+            password="apppass",
+            from_address="bot@gmail.com",
+            use_tls=True,
+            use_ssl=False,
+        ),
+    )
+
+    mock_conn.starttls.assert_called_once()
+    mock_conn.login.assert_called_once_with("bot@gmail.com", "apppass")
+    mock_conn.send_message.assert_called_once()
+    sent = mock_conn.send_message.call_args[0][0]
+    assert sent["To"] == "alice@illinois.edu"
+    assert sent["From"] == "bot@gmail.com"
+    assert sent["Subject"] == "Hi"
+    assert sent.get_content().rstrip("\n") == "Body"
