@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import smtplib
 import ssl
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
@@ -23,9 +24,19 @@ from typing import Any, Protocol
 
 from loguru import logger
 
+from nanobot.config.loader import load_config
 from nanobot.onboard.email_canonical import canonical_illinois_email
 from nanobot.onboard.parser import extract_members, is_gies_program
-from nanobot.onboard.sheet_io import SheetWriter, stamp_not_eligible, stamp_reminder
+from nanobot.onboard.reminder_config import ReminderPollerConfig
+from nanobot.onboard.sheet_io import (
+    SheetWriter,
+    fetch_rows,
+    open_client,
+    open_first_worksheet,
+    open_worksheet_by_gid,
+    stamp_not_eligible,
+    stamp_reminder,
+)
 from nanobot.onboard.templates import RenderedEmail, load_template, render
 
 
@@ -237,6 +248,53 @@ def smtp_settings_from_config(config: Any) -> SMTPSettings:
         use_tls=email_cfg.smtp_use_tls,
         use_ssl=email_cfg.smtp_use_ssl,
     )
+
+
+def _build_send_fn(smtp: SMTPSettings) -> SendFn:
+    def send(*, to_email: str, rendered: RenderedEmail) -> None:
+        send_email(to_email=to_email, rendered=rendered, smtp=smtp)
+    return send
+
+
+def main() -> None:
+    """Run the reminder poller loop forever."""
+    cfg = ReminderPollerConfig.from_env()
+    nb_config = load_config()
+    smtp = smtp_settings_from_config(nb_config)
+
+    client = open_client(cfg.service_account_path)
+    interest_ws = open_worksheet_by_gid(client, cfg.interest_sheet_id, cfg.interest_sheet_gid)
+    application_ws = open_first_worksheet(client, cfg.application_sheet_id)
+    writer = SheetWriter(interest_ws)
+    send_fn = _build_send_fn(smtp)
+
+    logger.info(
+        "Reminder poller starting: interest={} app={} interval={}s cap={}",
+        cfg.interest_sheet_id,
+        cfg.application_sheet_id,
+        cfg.poll_interval_seconds,
+        cfg.max_reminders,
+    )
+
+    while True:
+        try:
+            interest_rows = fetch_rows(interest_ws)
+            application_rows = fetch_rows(application_ws)
+            run_once(
+                interest_rows=interest_rows,
+                application_rows=application_rows,
+                writer=writer,
+                send_fn=send_fn,
+                max_reminders=cfg.max_reminders,
+                now=datetime.now(),
+            )
+        except Exception:
+            logger.exception("Reminder poller cycle crashed; sleeping and retrying")
+        time.sleep(cfg.poll_interval_seconds)
+
+
+if __name__ == "__main__":
+    main()
 
 
 def build_applied_set(rows: Iterable[list[str]]) -> set[str]:
