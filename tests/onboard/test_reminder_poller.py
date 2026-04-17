@@ -163,3 +163,91 @@ def test_send_email_starttls(mock_smtp_cls: MagicMock) -> None:
     assert sent["From"] == "bot@gmail.com"
     assert sent["Subject"] == "Hi"
     assert sent.get_content().rstrip("\n") == "Body"
+
+
+from datetime import datetime
+
+from nanobot.onboard.reminder_poller import run_once
+
+
+def test_run_once_sends_reminder_and_stamps() -> None:
+    interest_rows = [_interest(name="Alice", email="alice@illinois.edu", program="Finance")]
+    sent: list[tuple[str, str]] = []
+    writer = MagicMock()
+    now = datetime(2026, 4, 17, 12, 0, 0)
+
+    run_once(
+        interest_rows=interest_rows,
+        application_rows=[],
+        writer=writer,
+        send_fn=lambda *, to_email, rendered: sent.append((to_email, rendered.subject)),
+        max_reminders=3,
+        now=now,
+    )
+
+    assert sent == [("alice@illinois.edu", "Finish your Gies AI for Impact Challenge application")]
+    # row_index 1 (first data row), new_count = 1. _sheet_row = row_index + 1 = 2.
+    writer.worksheet.update_cell.assert_any_call(2, 12, 1)
+    writer.worksheet.update_cell.assert_any_call(2, 13, "2026-04-17T12:00:00")
+
+
+def test_run_once_sends_not_eligible_for_non_gies() -> None:
+    interest_rows = [_interest(email="dan@illinois.edu", program="Computer Science")]
+    sent: list[tuple[str, str]] = []
+    writer = MagicMock()
+    now = datetime(2026, 4, 17, 12, 0, 0)
+
+    run_once(
+        interest_rows=interest_rows,
+        application_rows=[],
+        writer=writer,
+        send_fn=lambda *, to_email, rendered: sent.append((to_email, rendered.subject)),
+        max_reminders=3,
+        now=now,
+    )
+
+    assert sent[0][0] == "dan@illinois.edu"
+    assert "Gies AI for Impact Challenge" in sent[0][1]
+    writer.worksheet.update_cell.assert_called_once_with(2, 14, "2026-04-17T12:00:00")
+
+
+def test_run_once_skips_applied() -> None:
+    interest_rows = [_interest(email="bob@illinois.edu", program="Finance")]
+    app_row = ["TeamX", "1", "m", "m", "m", "m"]
+    app_row += ["Bob", "BOB@illinois.edu", "Finance", "Senior"]
+    app_row += ["", "", "", ""] * 3
+    app_row += ["focus", "comfort", "yes"]
+
+    sent: list[tuple[str, str]] = []
+    writer = MagicMock()
+
+    run_once(
+        interest_rows=interest_rows,
+        application_rows=[app_row],
+        writer=writer,
+        send_fn=lambda *, to_email, rendered: sent.append((to_email, rendered.subject)),
+        max_reminders=3,
+        now=datetime(2026, 4, 17, 12, 0, 0),
+    )
+
+    assert sent == []
+    writer.worksheet.update_cell.assert_not_called()
+
+
+def test_run_once_send_failure_does_not_increment_count() -> None:
+    interest_rows = [_interest(email="alice@illinois.edu", program="Finance")]
+    writer = MagicMock()
+
+    def boom(*, to_email: str, rendered) -> None:
+        raise ConnectionError("smtp down")
+
+    run_once(
+        interest_rows=interest_rows,
+        application_rows=[],
+        writer=writer,
+        send_fn=boom,
+        max_reminders=3,
+        now=datetime(2026, 4, 17, 12, 0, 0),
+    )
+
+    writer.worksheet.update_cell.assert_not_called()

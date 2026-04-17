@@ -15,14 +15,18 @@ import smtplib
 import ssl
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime
 from email.message import EmailMessage
 from enum import Enum
+from pathlib import Path
+from typing import Protocol
 
 from loguru import logger
 
 from nanobot.onboard.email_canonical import canonical_illinois_email
 from nanobot.onboard.parser import extract_members, is_gies_program
-from nanobot.onboard.templates import RenderedEmail
+from nanobot.onboard.sheet_io import SheetWriter, stamp_not_eligible, stamp_reminder
+from nanobot.onboard.templates import RenderedEmail, load_template, render
 
 
 class Action(str, Enum):
@@ -150,6 +154,75 @@ def send_email(*, to_email: str, rendered: RenderedEmail, smtp: SMTPSettings) ->
             conn.starttls(context=ssl.create_default_context())
         conn.login(smtp.username, smtp.password)
         conn.send_message(msg)
+
+
+_TEMPLATE_DIR = Path(__file__).parent
+_REMINDER_TEMPLATE_PATH = _TEMPLATE_DIR / "reminder_email_template.txt"
+_NOT_ELIGIBLE_TEMPLATE_PATH = _TEMPLATE_DIR / "not_eligible_email_template.txt"
+
+
+class SendFn(Protocol):
+    """Protocol for the inject-able SMTP sender."""
+
+    def __call__(self, *, to_email: str, rendered: RenderedEmail) -> None: ...
+
+
+def _render_for(action: Action, *, name: str) -> RenderedEmail:
+    if action is Action.REMINDER:
+        raw = load_template(_REMINDER_TEMPLATE_PATH)
+    else:
+        raw = load_template(_NOT_ELIGIBLE_TEMPLATE_PATH)
+    return render(raw, name=name)
+
+
+def run_once(
+    *,
+    interest_rows: list[list[str]],
+    application_rows: list[list[str]],
+    writer: SheetWriter,
+    send_fn: SendFn,
+    max_reminders: int,
+    now: datetime,
+) -> None:
+    """One full poll cycle. Pure orchestration; all I/O is injected.
+
+    On send failure for a single row: log and continue, **do not** stamp
+    the dedup columns, so the next cycle naturally retries.
+    """
+    applied = build_applied_set(application_rows)
+    logger.info(
+        "Reminder poller cycle: {} applicants, {} interest rows",
+        len(applied),
+        len(interest_rows),
+    )
+
+    for idx, raw in enumerate(interest_rows, start=1):
+        ir = parse_interest_row(idx, raw)
+        action = classify(ir, applied=applied, max_reminders=max_reminders)
+        if action is Action.SKIP:
+            continue
+
+        canon = canonical_illinois_email(ir.raw_email) or ir.raw_email
+        rendered = _render_for(action, name=ir.name or "there")
+
+        try:
+            send_fn(to_email=canon, rendered=rendered)
+        except Exception as exc:
+            logger.error(
+                "Failed to send {} to {} (row {}): {}; will retry next cycle",
+                action.value,
+                canon,
+                idx,
+                exc,
+            )
+            continue
+
+        if action is Action.REMINDER:
+            stamp_reminder(
+                writer, row_index=idx, new_count=ir.reminder_count + 1, now=now,
+            )
+        else:
+            stamp_not_eligible(writer, row_index=idx, now=now)
 
 
 def build_applied_set(rows: Iterable[list[str]]) -> set[str]:
