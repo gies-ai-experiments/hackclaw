@@ -35,3 +35,53 @@ def test_build_applied_set_drops_non_illinois() -> None:
 def test_build_applied_set_skips_blank_rows() -> None:
     rows = [["", "", "", "", "", ""]]  # too short, no members
     assert build_applied_set(rows) == set()
+
+
+from nanobot.onboard.reminder_poller import Action, InterestRow, classify
+
+
+def _ir(
+    *,
+    email: str = "alice@illinois.edu",
+    program: str = "Finance",
+    reminder_count: int = 0,
+    not_eligible_sent: str = "",
+) -> InterestRow:
+    return InterestRow(
+        row_index=2,
+        name="Alice",
+        raw_email=email,
+        program=program,
+        reminder_count=reminder_count,
+        not_eligible_sent_at=not_eligible_sent,
+    )
+
+
+def test_classify_skip_when_already_applied() -> None:
+    row = _ir()
+    assert classify(row, applied={"alice@illinois.edu"}, max_reminders=3) == Action.SKIP
+
+
+def test_classify_skip_when_non_illinois_email() -> None:
+    row = _ir(email="alice@gmail.com")
+    assert classify(row, applied=set(), max_reminders=3) == Action.SKIP
+
+
+def test_classify_reminder_when_gies_and_not_applied() -> None:
+    row = _ir(program="Finance", reminder_count=0)
+    assert classify(row, applied=set(), max_reminders=3) == Action.REMINDER
+
+
+def test_classify_skip_when_reminder_cap_reached() -> None:
+    row = _ir(program="Finance", reminder_count=3)
+    assert classify(row, applied=set(), max_reminders=3) == Action.SKIP
+
+
+def test_classify_not_eligible_when_non_gies_program() -> None:
+    row = _ir(program="Computer Science", reminder_count=0)
+    assert classify(row, applied=set(), max_reminders=3) == Action.NOT_ELIGIBLE
+
+
+def test_classify_skip_when_not_eligible_already_sent() -> None:
+    row = _ir(program="Computer Science", not_eligible_sent="2026-04-17T10:00:00")
+    assert classify(row, applied=set(), max_reminders=3) == Action.SKIP
