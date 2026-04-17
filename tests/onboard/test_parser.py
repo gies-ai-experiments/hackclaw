@@ -169,3 +169,17 @@ def test_parse_rejects_missing_team_name(tmp_path: Path) -> None:
 def test_slugify_team_name(name: str, expected_slug: str) -> None:
     """Slugify converts names to lowercase, strips special chars, and hyphenates."""
     assert slugify_team_name(name) == expected_slug
+
+
+def test_extract_members_public_helper(tmp_path: Path) -> None:
+    """extract_members is exported and pulls members from a row list."""
+    from nanobot.onboard.parser import extract_members
+
+    row = ["Team", "1", "m", "m", "m", "m"]
+    row += ["Alice", "alice@illinois.edu", "Finance", "Junior"]
+    row += ["", "", "", ""] * 3
+    row += ["focus", "comfort", "yes"]
+    members = extract_members(row)
+    assert len(members) == 1
+    assert members[0].name == "Alice"
+    assert members[0].email == "alice@illinois.edu"

@@ -176,7 +176,7 @@ def parse_teams_csv(csv_path: str, *, gies_only: bool = True) -> list[Team]:
                 logger.debug("Row {}: empty team name — skipped", row_num)
                 continue
 
-            members = _extract_members(row)
+            members = extract_members(row)
 
             if gies_only:
                 eligible: list[Member] = []
@@ -242,7 +242,7 @@ def slugify_team_name(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _extract_members(row: list[str]) -> list[Member]:
+def extract_members(row: list[str]) -> list[Member]:
     """Pull up to 4 members from a CSV row, skipping empty slots."""
     members: list[Member] = []
     for i in range(_MAX_MEMBERS):
