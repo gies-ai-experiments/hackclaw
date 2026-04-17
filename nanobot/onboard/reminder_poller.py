@@ -19,7 +19,7 @@ from datetime import datetime
 from email.message import EmailMessage
 from enum import Enum
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from loguru import logger
 
@@ -223,6 +223,20 @@ def run_once(
             )
         else:
             stamp_not_eligible(writer, row_index=idx, now=now)
+
+
+def smtp_settings_from_config(config: Any) -> SMTPSettings:
+    """Pull SMTP creds out of the nanobot ``Config`` object."""
+    email_cfg = config.channels.email
+    return SMTPSettings(
+        host=email_cfg.smtp_host,
+        port=email_cfg.smtp_port,
+        username=email_cfg.smtp_username,
+        password=email_cfg.smtp_password,
+        from_address=email_cfg.from_address or email_cfg.smtp_username,
+        use_tls=email_cfg.smtp_use_tls,
+        use_ssl=email_cfg.smtp_use_ssl,
+    )
 
 
 def build_applied_set(rows: Iterable[list[str]]) -> set[str]:

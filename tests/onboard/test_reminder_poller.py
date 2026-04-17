@@ -256,3 +256,26 @@ def test_run_once_send_failure_does_not_increment_count() -> None:
     )
 
     ws.update_cell.assert_not_called()
+
+
+from nanobot.onboard.reminder_poller import smtp_settings_from_config
+
+
+def test_smtp_settings_from_config_extracts_email_channel() -> None:
+    fake_config = MagicMock()
+    fake_config.channels.email.smtp_host = "smtp.gmail.com"
+    fake_config.channels.email.smtp_port = 587
+    fake_config.channels.email.smtp_username = "bot@gmail.com"
+    fake_config.channels.email.smtp_password = "apppass"
+    fake_config.channels.email.smtp_use_tls = True
+    fake_config.channels.email.smtp_use_ssl = False
+    fake_config.channels.email.from_address = "bot@gmail.com"
+
+    settings = smtp_settings_from_config(fake_config)
+    assert settings.host == "smtp.gmail.com"
+    assert settings.port == 587
+    assert settings.username == "bot@gmail.com"
+    assert settings.password == "apppass"
+    assert settings.from_address == "bot@gmail.com"
+    assert settings.use_tls is True
+    assert settings.use_ssl is False
