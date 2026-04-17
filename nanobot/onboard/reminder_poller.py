@@ -186,6 +186,86 @@ def _render_for(action: Action, *, name: str) -> RenderedEmail:
     return render(raw, name=name)
 
 
+@dataclass(frozen=True)
+class Decision:
+    """The outcome of a single interest-row classification, for preview."""
+
+    row_index: int
+    name: str
+    canonical_email: str  # empty if not canonicalizable
+    program: str
+    action: Action
+    reminder_count: int  # current value before any increment
+
+
+def preview_decisions(
+    *,
+    interest_rows: list[list[str]],
+    application_rows: list[list[str]],
+    max_reminders: int,
+) -> list[Decision]:
+    """Classify every interest row without sending or stamping.
+
+    Returned list includes **all** rows (including ``SKIP``) so the
+    caller can print a full audit of what would happen.
+    """
+    applied = build_applied_set(application_rows)
+    decisions: list[Decision] = []
+    for idx, raw in enumerate(interest_rows, start=1):
+        ir = parse_interest_row(idx, raw)
+        action = classify(ir, applied=applied, max_reminders=max_reminders)
+        canon = canonical_illinois_email(ir.raw_email) or ""
+        decisions.append(
+            Decision(
+                row_index=idx,
+                name=ir.name,
+                canonical_email=canon,
+                program=ir.program,
+                action=action,
+                reminder_count=ir.reminder_count,
+            )
+        )
+    return decisions
+
+
+def format_preview(decisions: list[Decision]) -> str:
+    """Human-readable table of pending decisions, grouped by action."""
+    actionable = [d for d in decisions if d.action is not Action.SKIP]
+    skipped = [d for d in decisions if d.action is Action.SKIP]
+
+    lines: list[str] = []
+    lines.append(f"Total interest rows: {len(decisions)}")
+    lines.append(
+        f"  Reminders to send:     {sum(1 for d in actionable if d.action is Action.REMINDER)}"
+    )
+    lines.append(
+        f"  Not-eligible to send:  {sum(1 for d in actionable if d.action is Action.NOT_ELIGIBLE)}"
+    )
+    lines.append(f"  Skipped:               {len(skipped)}")
+    lines.append("")
+
+    if actionable:
+        lines.append("Will send:")
+        lines.append(f"  {'ROW':>3}  {'ACTION':<13}  {'NAME':<28}  {'EMAIL':<32}  PROGRAM")
+        lines.append("  " + "-" * 100)
+        for d in actionable:
+            action_str = d.action.value + (
+                f" (#{d.reminder_count + 1}/{d.reminder_count + 1})"
+                if d.action is Action.REMINDER
+                else ""
+            )
+            lines.append(
+                f"  {d.row_index:>3}  {d.action.value:<13}  "
+                f"{(d.name or '<blank>')[:28]:<28}  "
+                f"{(d.canonical_email or '<none>')[:32]:<32}  "
+                f"{d.program[:30]}"
+            )
+    else:
+        lines.append("No actionable rows — nothing to send.")
+
+    return "\n".join(lines)
+
+
 def run_once(
     *,
     interest_rows: list[list[str]],
