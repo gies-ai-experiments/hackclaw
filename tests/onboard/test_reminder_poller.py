@@ -85,3 +85,46 @@ def test_classify_not_eligible_when_non_gies_program() -> None:
 def test_classify_skip_when_not_eligible_already_sent() -> None:
     row = _ir(program="Computer Science", not_eligible_sent="2026-04-17T10:00:00")
     assert classify(row, applied=set(), max_reminders=3) == Action.SKIP
+
+
+from nanobot.onboard.reminder_poller import parse_interest_row
+
+
+def _interest(*, name="A", email="a@illinois.edu", program="Finance",
+              count="", last_at="", neligible_at="") -> list[str]:
+    return [
+        "2026-04-17T00:00:00", name, email, "Junior", "Yes", program,
+        "x", "x", "x", "x", "x",
+        count, last_at, neligible_at,
+    ]
+
+
+def test_parse_interest_row_basic() -> None:
+    raw = _interest()
+    row = parse_interest_row(2, raw)
+    assert row.row_index == 2
+    assert row.name == "A"
+    assert row.raw_email == "a@illinois.edu"
+    assert row.program == "Finance"
+    assert row.reminder_count == 0
+    assert row.not_eligible_sent_at == ""
+
+
+def test_parse_interest_row_reads_dedup_state() -> None:
+    raw = _interest(count="2", last_at="2026-04-17T01:00:00", neligible_at="")
+    row = parse_interest_row(7, raw)
+    assert row.row_index == 7
+    assert row.reminder_count == 2
+
+
+def test_parse_interest_row_short_row_defaults_dedup() -> None:
+    raw = _interest()[:6]  # only timestamp..program
+    row = parse_interest_row(3, raw)
+    assert row.reminder_count == 0
+    assert row.not_eligible_sent_at == ""
+
+
+def test_parse_interest_row_garbage_count_defaults_zero() -> None:
+    raw = _interest(count="not-a-number")
+    row = parse_interest_row(4, raw)
+    assert row.reminder_count == 0

@@ -74,6 +74,46 @@ def classify(row: InterestRow, *, applied: set[str], max_reminders: int) -> Acti
     return Action.NOT_ELIGIBLE
 
 
+INTEREST_COL_NAME = 1
+INTEREST_COL_EMAIL = 2
+INTEREST_COL_PROGRAM = 5
+INTEREST_COL_REMINDER_COUNT = 11    # column L
+INTEREST_COL_LAST_REMINDER_AT = 12  # column M
+INTEREST_COL_NOT_ELIGIBLE_AT = 13   # column N
+
+
+def _cell(row: list[str], idx: int) -> str:
+    """Return ``row[idx]`` stripped, or '' if the row is shorter than *idx+1*."""
+    if idx >= len(row):
+        return ""
+    return (row[idx] or "").strip()
+
+
+def parse_interest_row(row_index: int, raw: list[str]) -> InterestRow:
+    """Build an :class:`InterestRow` from a 1-based data row index.
+
+    Missing dedup columns default to ``0`` / ``""``. A non-integer
+    ``Reminder Count`` cell is logged and treated as ``0`` so a one-off
+    typo can't permanently lock a row.
+    """
+    count_raw = _cell(raw, INTEREST_COL_REMINDER_COUNT)
+    try:
+        reminder_count = int(count_raw) if count_raw else 0
+    except ValueError:
+        logger.warning(
+            "Row {}: invalid Reminder Count {!r}; treating as 0", row_index, count_raw
+        )
+        reminder_count = 0
+    return InterestRow(
+        row_index=row_index,
+        name=_cell(raw, INTEREST_COL_NAME),
+        raw_email=_cell(raw, INTEREST_COL_EMAIL),
+        program=_cell(raw, INTEREST_COL_PROGRAM),
+        reminder_count=reminder_count,
+        not_eligible_sent_at=_cell(raw, INTEREST_COL_NOT_ELIGIBLE_AT),
+    )
+
+
 def build_applied_set(rows: Iterable[list[str]]) -> set[str]:
     """Return canonical Illinois emails of every member on the application sheet.
 
