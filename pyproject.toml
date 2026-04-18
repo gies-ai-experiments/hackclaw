@@ -41,6 +41,7 @@ dependencies = [
     "dulwich>=0.22.0,<1.0.0",
     "gspread>=6.0.0,<7.0.0",
     "google-auth>=2.30.0,<3.0.0",
+    "python-telegram-bot>=21.0,<23.0",
 ]
 
 [project.optional-dependencies]
