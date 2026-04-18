@@ -22,6 +22,7 @@ from nanobot.agent.tools.cron import CronTool
 from nanobot.agent.skills import BUILTIN_SKILLS_DIR
 from nanobot.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from nanobot.agent.tools.admin import (
+    DraftEmailTool,
     ListApplicantsTool,
     RunWorkflowTool,
     SendDiscordTool,
@@ -290,6 +291,7 @@ class AgentLoop:
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SendEmailTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SendDiscordTool(send_callback=self.bus.publish_outbound))
+        self.tools.register(DraftEmailTool())
         self.tools.register(TriggerCycleTool())
         self.tools.register(ListApplicantsTool())
         self.tools.register(RunWorkflowTool(registry=self.tools))
@@ -325,7 +327,7 @@ class AgentLoop:
         """Update context for all tools that need routing info."""
         for name in (
             "message", "spawn", "cron",
-            "send_email", "send_discord", "trigger_cycle",
+            "send_email", "send_discord", "draft_email", "trigger_cycle",
             "list_applicants", "run_workflow",
         ):
             if tool := self.tools.get(name):

@@ -273,6 +273,76 @@ async def test_run_workflow_errors_on_missing_for_each_source() -> None:
 from nanobot.agent.tools.admin import ListApplicantsTool
 
 
+from nanobot.agent.tools.admin import DraftEmailTool
+
+
+@pytest.mark.asyncio
+async def test_draft_email_rejects_non_telegram() -> None:
+    tool = DraftEmailTool()
+    tool.set_context(channel="discord", chat_id="x")
+    out = await tool.execute(to="a@b.com", subject="s", body="b")
+    assert "restricted to the Telegram admin channel" in out
+
+
+@pytest.mark.asyncio
+async def test_draft_email_calls_imap_append(monkeypatch) -> None:
+    """Draft path: stub out IMAP + config loader; verify APPEND payload."""
+    from nanobot.agent.tools import admin as admin_mod
+
+    # Fake config
+    monkeypatch.setattr(
+        admin_mod,
+        "_load_email_channel_config",
+        lambda: {
+            "imapHost": "imap.gmail.com",
+            "imapPort": 993,
+            "imapUsername": "giesbuildathon@gmail.com",
+            "imapPassword": "apppass",
+            "fromAddress": "giesbuildathon@gmail.com",
+        },
+    )
+
+    class _FakeIMAP:
+        logins: list[tuple[str, str]] = []
+        appends: list[tuple[str, str, bytes]] = []
+
+        def __init__(self, host: str, port: int, ssl_context=None) -> None:
+            self.host = host
+            self.port = port
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def login(self, u: str, p: str) -> None:
+            self.logins.append((u, p))
+
+        def append(self, folder: str, flags: str, date_time, msg_bytes: bytes):
+            self.appends.append((folder, flags, msg_bytes))
+            return ("OK", [b"[APPENDUID 1 2] (Success)"])
+
+    import imaplib as _imap
+    monkeypatch.setattr(_imap, "IMAP4_SSL", _FakeIMAP)
+
+    tool = DraftEmailTool()
+    tool.set_context(channel="telegram", chat_id="1")
+    out = await tool.execute(
+        to="alice@illinois.edu", subject="hi", body="Hi Alice,\n\nTest\n"
+    )
+
+    assert "Draft saved" in out
+    assert _FakeIMAP.logins == [("giesbuildathon@gmail.com", "apppass")]
+    assert len(_FakeIMAP.appends) == 1
+    folder, flags, raw = _FakeIMAP.appends[0]
+    assert folder == "[Gmail]/Drafts"
+    assert flags == "(\\Draft)"
+    assert b"To: alice@illinois.edu" in raw
+    assert b"Subject: hi" in raw
+    assert b"Hi Alice" in raw
+
+
 @pytest.mark.asyncio
 async def test_list_applicants_rejects_non_telegram() -> None:
     tool = ListApplicantsTool()

@@ -38,6 +38,15 @@ _TELEGRAM_ONLY_ERROR = (
     "Ignore and respond normally."
 )
 
+_CONFIG_PATH = os.environ.get("NANOBOT_CONFIG_PATH", "/root/.nanobot/config.json")
+
+
+def _load_email_channel_config() -> dict[str, Any]:
+    """Read channels.email from the live nanobot config.json."""
+    with open(_CONFIG_PATH) as f:
+        cfg = json.load(f)
+    return (cfg.get("channels") or {}).get("email") or {}
+
 
 class _AdminTool(Tool):
     """Mixin: records the current conversation's channel + sender for gating."""
@@ -131,6 +140,95 @@ class SendEmailTool(_AdminTool):
         except Exception as exc:
             return f"Error sending email to {to}: {exc}"
         return f"Email dispatched to {to} (subject: {subject!r})"
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        to=StringSchema("Recipient email address."),
+        subject=StringSchema("Email subject line."),
+        body=StringSchema("Email body (plain text)."),
+        required=["to", "subject", "body"],
+    )
+)
+class DraftEmailTool(_AdminTool):
+    """Save an email as a Gmail Draft via IMAP APPEND — does NOT send.
+
+    The admin can then open gmail.com → Drafts, review/edit, and send
+    manually. Useful for ghost-writing by the agent without the agent
+    ever touching SMTP.
+    """
+
+    @property
+    def name(self) -> str:
+        return "draft_email"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Save an email as a draft in the giesbuildathon@gmail.com Gmail "
+            "Drafts folder. The email is NOT sent — the admin opens Gmail "
+            "and chooses whether to review, edit, and send. Use this when "
+            "the admin asks you to 'draft an email', 'make a draft', "
+            "'save a draft', 'prepare a draft in gmail', or when they "
+            "want to review and send themselves rather than have the bot "
+            "send immediately. Telegram-only."
+        )
+
+    async def execute(self, *, to: str, subject: str, body: str, **_: Any) -> str:
+        err = self._gate()
+        if err:
+            return err
+
+        import imaplib
+        import ssl
+        import time
+        from email.message import EmailMessage
+        from email.utils import formatdate, make_msgid
+
+        try:
+            cfg = _load_email_channel_config()
+        except Exception as exc:
+            return f"Error loading email config: {exc}"
+
+        imap_host = cfg.get("imapHost") or cfg.get("imap_host") or "imap.gmail.com"
+        imap_port = int(cfg.get("imapPort") or cfg.get("imap_port") or 993)
+        imap_username = cfg.get("imapUsername") or cfg.get("imap_username") or ""
+        imap_password = cfg.get("imapPassword") or cfg.get("imap_password") or ""
+        from_address = cfg.get("fromAddress") or cfg.get("from_address") or imap_username
+
+        if not (imap_host and imap_username and imap_password):
+            return "Error: IMAP credentials not configured in channels.email"
+
+        msg = EmailMessage()
+        msg["From"] = from_address
+        msg["To"] = to.strip()
+        msg["Subject"] = subject
+        msg["Date"] = formatdate(localtime=True)
+        msg["Message-ID"] = make_msgid(domain=from_address.split("@", 1)[-1] if "@" in from_address else "local")
+        msg.set_content(body)
+
+        def _append() -> str:
+            with imaplib.IMAP4_SSL(imap_host, imap_port, ssl_context=ssl.create_default_context()) as m:
+                m.login(imap_username, imap_password)
+                # Gmail's drafts folder. Case-sensitive; localized installs may
+                # differ but for English Gmail this is stable.
+                folder = "[Gmail]/Drafts"
+                flags = "(\\Draft)"
+                date_time = imaplib.Time2Internaldate(time.time())
+                typ, data = m.append(folder, flags, date_time, msg.as_bytes())
+                return f"{typ} {data!r}"
+
+        try:
+            await asyncio.to_thread(_append)
+        except Exception as exc:
+            return f"Error saving draft: {exc}"
+
+        logger.info("Draft saved for {}: {!r}", to, subject)
+        return (
+            f"Draft saved to Gmail Drafts folder (giesbuildathon@gmail.com). "
+            f"To: {to}, Subject: {subject!r}. Open Gmail -> Drafts to review "
+            "and send."
+        )
 
 
 @tool_parameters(
