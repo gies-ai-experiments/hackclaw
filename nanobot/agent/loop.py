@@ -21,7 +21,13 @@ from nanobot.agent.subagent import SubagentManager
 from nanobot.agent.tools.cron import CronTool
 from nanobot.agent.skills import BUILTIN_SKILLS_DIR
 from nanobot.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
-from nanobot.agent.tools.admin import SendDiscordTool, SendEmailTool, TriggerCycleTool
+from nanobot.agent.tools.admin import (
+    ListApplicantsTool,
+    RunWorkflowTool,
+    SendDiscordTool,
+    SendEmailTool,
+    TriggerCycleTool,
+)
 from nanobot.agent.tools.message import MessageTool
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.search import GlobTool, GrepTool
@@ -285,6 +291,8 @@ class AgentLoop:
         self.tools.register(SendEmailTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SendDiscordTool(send_callback=self.bus.publish_outbound))
         self.tools.register(TriggerCycleTool())
+        self.tools.register(ListApplicantsTool())
+        self.tools.register(RunWorkflowTool(registry=self.tools))
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:
             self.tools.register(
@@ -315,7 +323,11 @@ class AgentLoop:
 
     def _set_tool_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
         """Update context for all tools that need routing info."""
-        for name in ("message", "spawn", "cron", "send_email", "send_discord", "trigger_cycle"):
+        for name in (
+            "message", "spawn", "cron",
+            "send_email", "send_discord", "trigger_cycle",
+            "list_applicants", "run_workflow",
+        ):
             if tool := self.tools.get(name):
                 if hasattr(tool, "set_context"):
                     tool.set_context(channel, chat_id, *([message_id] if name == "message" else []))
