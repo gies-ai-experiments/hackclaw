@@ -65,10 +65,14 @@ GIES_PROGRAM_KEYWORDS: frozenset[str] = frozenset(
         "msa",
         "msf",
         "msba",
+        "mstm",           # MS Technology Management
+        "msm",            # MS Management
+        "imsm",           # iMSM (online MSM)
         "master of accountancy",
         "master of finance",
         "master of business",
         "technology management",
+        "information system",  # catches singular typos
         # Catch-all / college name
         "gies",
     }
