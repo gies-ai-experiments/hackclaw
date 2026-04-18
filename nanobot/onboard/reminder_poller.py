@@ -382,10 +382,16 @@ def build_applied_set(rows: Iterable[list[str]]) -> set[str]:
 
     *rows* is an iterable of raw row lists (header already stripped).
     Non-``@illinois.edu`` emails are silently dropped.
+
+    The live Google Sheet appends a ``Timestamp`` column at position 0 that
+    is absent from the CSV export ``parser.py`` was originally written for.
+    We strip it before delegating to :func:`extract_members`, which assumes
+    team-name at col 0 and member 1 at col 6.
     """
     applied: set[str] = set()
     for row in rows:
-        for member in extract_members(row):
+        trimmed = row[1:] if row else row  # drop Timestamp column
+        for member in extract_members(trimmed):
             canon = canonical_illinois_email(member.email)
             if canon is None:
                 logger.warning(
