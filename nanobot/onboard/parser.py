@@ -60,14 +60,13 @@ GIES_PROGRAM_KEYWORDS: frozenset[str] = frozenset(
         "business analytics",
         "badm",
         "business",
-        # Graduate degrees
+        # Graduate degrees (in-person only — online variants are excluded below)
         "mba",
         "msa",
         "msf",
         "msba",
         "mstm",           # MS Technology Management
         "msm",            # MS Management
-        "imsm",           # iMSM (online MSM)
         "master of accountancy",
         "master of finance",
         "master of business",
@@ -85,15 +84,28 @@ _GIES_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     re.compile(rf"\b{re.escape(kw)}\b", re.IGNORECASE) for kw in GIES_PROGRAM_KEYWORDS
 )
 
+# Online-program exclusions. The hackathon is in-person only, so online
+# Gies programs (iMBA, iMSM, iMSA) are filtered out even though their
+# non-online counterparts (MBA, MSM, MSA) are valid. Anything containing
+# the word "online" is also excluded.
+_ONLINE_EXCLUSION_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(rf"\b{kw}\b", re.IGNORECASE)
+    for kw in ("online", "imba", "imsm", "imsa")
+)
+
 
 def is_gies_program(program: str) -> bool:
-    """Return ``True`` when *program* looks like a Gies College program.
+    """Return ``True`` when *program* looks like an **in-person** Gies program.
 
-    The check is deliberately permissive: it matches any whole-word Gies
-    keyword (see :data:`GIES_PROGRAM_KEYWORDS`) anywhere inside the field.
-    Empty or whitespace-only strings return ``False``.
+    Matches any whole-word Gies keyword (see :data:`GIES_PROGRAM_KEYWORDS`)
+    anywhere inside the field. Empty or whitespace-only strings return
+    ``False``. Online variants (``online`` anywhere in the text, or the
+    ``i``-prefixed variants ``iMBA``/``iMSM``/``iMSA``) are explicitly
+    excluded because the event is on-campus only.
     """
     if not program or not program.strip():
+        return False
+    if any(p.search(program) for p in _ONLINE_EXCLUSION_PATTERNS):
         return False
     return any(pattern.search(program) for pattern in _GIES_PATTERNS)
 
