@@ -28,7 +28,7 @@ jobs:
 
       - name: Run reminder-poller test suite
         run: |
-          pytest -q \
+          python -m pytest -q \
             tests/onboard/test_email_canonical.py \
             tests/onboard/test_templates.py \
             tests/onboard/test_reminder_config.py \
