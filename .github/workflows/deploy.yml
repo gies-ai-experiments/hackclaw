@@ -1,0 +1,60 @@
+name: CI / Deploy to Hetzner
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-hetzner
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install project
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Run reminder-poller test suite
+        run: |
+          pytest -q \
+            tests/onboard/test_email_canonical.py \
+            tests/onboard/test_templates.py \
+            tests/onboard/test_reminder_config.py \
+            tests/onboard/test_reminder_poller.py \
+            tests/onboard/test_sheet_io.py
+
+  deploy:
+    name: SSH deploy to Hetzner
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.HETZNER_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ secrets.HETZNER_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy
+        run: |
+          ssh -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 \
+            "${{ secrets.HETZNER_USER }}@${{ secrets.HETZNER_HOST }}" \
+            'bash /opt/hackclaw/deploy.sh'
+
+      - name: Verify gateway is running
+        run: |
+          ssh -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 \
+            "${{ secrets.HETZNER_USER }}@${{ secrets.HETZNER_HOST }}" \
+            'systemctl is-active hackclaw-gateway.service'
