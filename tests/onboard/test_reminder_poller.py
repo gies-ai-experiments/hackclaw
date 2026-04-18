@@ -5,8 +5,13 @@ from nanobot.onboard.reminder_poller import build_applied_set
 
 
 def _app_row(*members: tuple[str, str, str, str]) -> list[str]:
-    """Build a 25-col application row with up to 4 members."""
-    row = ["TeamX", str(len(members)), "m", "m", "m", "m"]
+    """Build a 26-col application row with up to 4 members.
+
+    Matches the live Google Sheet shape: Timestamp at col 0, then the
+    25 columns parser.py originally expected from the CSV export.
+    ``build_applied_set`` strips col 0 before parsing.
+    """
+    row = ["2026-04-17T00:00:00", "TeamX", str(len(members)), "m", "m", "m", "m"]
     for i in range(4):
         if i < len(members):
             row.extend(members[i])
@@ -216,7 +221,8 @@ def test_run_once_sends_not_eligible_for_non_gies() -> None:
 
 def test_run_once_skips_applied() -> None:
     interest_rows = [_interest(email="bob@illinois.edu", program="Finance")]
-    app_row = ["TeamX", "1", "m", "m", "m", "m"]
+    # Live sheet layout: Timestamp at col 0, then the 25 CSV-export columns.
+    app_row = ["2026-04-17T00:00:00", "TeamX", "1", "m", "m", "m", "m"]
     app_row += ["Bob", "BOB@illinois.edu", "Finance", "Senior"]
     app_row += ["", "", "", ""] * 3
     app_row += ["focus", "comfort", "yes"]
