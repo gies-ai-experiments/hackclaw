@@ -295,3 +295,63 @@ async def test_list_applicants_requires_env() -> None:
         for k, v in saved.items():
             if v is not None:
                 os.environ[k] = v
+
+
+@pytest.mark.asyncio
+async def test_list_applicants_filters_gies_only(monkeypatch, tmp_path) -> None:
+    """Integration-ish: fake the sheet layer, confirm gies_only filter."""
+    from nanobot.agent.tools import admin as admin_mod
+
+    # 2 Gies applicants (Finance, Marketing), 1 non-Gies (Computer Science)
+    fake_rows = [
+        # Timestamp + the 25 CSV-export cols: [team_name, num, meta×4, member1×4, member2×4, ...]
+        [
+            "2026-04-17", "GiesTeam", "2", "m", "m", "m", "m",
+            "Alice", "alice@illinois.edu", "Finance", "Junior",
+            "Bob", "bob@illinois.edu", "Marketing", "Senior",
+            "", "", "", "",
+            "", "", "", "",
+            "focus", "comfort", "yes",
+        ],
+        [
+            "2026-04-17", "OtherTeam", "1", "m", "m", "m", "m",
+            "Carol", "carol@illinois.edu", "Computer Science", "Senior",
+            "", "", "", "",
+            "", "", "", "",
+            "", "", "", "",
+            "focus", "comfort", "yes",
+        ],
+    ]
+
+    class FakeClient:
+        def open_by_key(self, *_, **__): return self
+        @property
+        def sheet1(self): return self
+        def get_all_values(self): return [["hdr"]] + fake_rows
+
+    monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_JSON", "/fake/sa.json")
+    monkeypatch.setenv("GIES_SHEET_ID", "fake-sheet-id")
+
+    # Patch the lazy imports inside admin.execute
+    monkeypatch.setattr("nanobot.onboard.sheet_io.open_client", lambda _: FakeClient())
+    monkeypatch.setattr(
+        "nanobot.onboard.sheet_io.open_first_worksheet",
+        lambda client, sid: client.sheet1,
+    )
+
+    tool = admin_mod.ListApplicantsTool()
+    tool.set_context(channel="telegram", chat_id="1")
+
+    # gies_only=True (default)
+    import json
+    out = json.loads(await tool.execute(limit=0))
+    emails = {row["email"] for row in out}
+    assert emails == {"alice@illinois.edu", "bob@illinois.edu"}
+    assert "carol@illinois.edu" not in emails  # CS filtered out
+
+    # gies_only=False includes everyone
+    out_all = json.loads(await tool.execute(limit=0, gies_only=False))
+    emails_all = {row["email"] for row in out_all}
+    assert emails_all == {
+        "alice@illinois.edu", "bob@illinois.edu", "carol@illinois.edu",
+    }

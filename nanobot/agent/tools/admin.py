@@ -235,6 +235,15 @@ class TriggerCycleTool(_AdminTool):
             description="Max members to return (0 = all). Use small values while drafting to keep tokens low.",
             minimum=0,
         ),
+        gies_only=BooleanSchema(
+            description=(
+                "When true (default), only Gies-eligible applicants are returned "
+                "— those whose declared Program / Major matches a Gies keyword "
+                "(Finance, Accounting, BADM, Marketing, MBA, etc.). Set false "
+                "ONLY if you specifically need the non-Gies rows too."
+            ),
+            default=True,
+        ),
     )
 )
 class ListApplicantsTool(_AdminTool):
@@ -248,7 +257,9 @@ class ListApplicantsTool(_AdminTool):
     def description(self) -> str:
         return (
             "Read the Gies AI for Impact Challenge application sheet and return "
-            "a JSON list of unique applicants as [{name, email, team}]. "
+            "a JSON list of unique applicants as [{name, email, team, program}]. "
+            "By default, ONLY Gies-eligible applicants are returned "
+            "(gies_only=true). Set gies_only=false to also include non-Gies rows. "
             "Every person listed on any team counts as an applicant; emails are "
             "canonicalized to @illinois.edu and duplicates dropped. "
             "Only callable from the Telegram admin channel."
@@ -258,7 +269,7 @@ class ListApplicantsTool(_AdminTool):
     def read_only(self) -> bool:
         return True
 
-    async def execute(self, *, limit: int = 0, **_: Any) -> str:
+    async def execute(self, *, limit: int = 0, gies_only: bool = True, **_: Any) -> str:
         err = self._gate()
         if err:
             return err
@@ -270,7 +281,7 @@ class ListApplicantsTool(_AdminTool):
 
         # Imported lazily so module import is cheap when not running.
         from nanobot.onboard.email_canonical import canonical_illinois_email
-        from nanobot.onboard.parser import extract_members
+        from nanobot.onboard.parser import extract_members, is_gies_program
         from nanobot.onboard.sheet_io import fetch_rows, open_client, open_first_worksheet
 
         try:
@@ -289,8 +300,15 @@ class ListApplicantsTool(_AdminTool):
                 canon = canonical_illinois_email(m.email)
                 if not canon or canon in seen:
                     continue
+                if gies_only and not is_gies_program(m.program):
+                    continue
                 seen.add(canon)
-                out.append({"name": m.name, "email": canon, "team": team})
+                out.append({
+                    "name": m.name,
+                    "email": canon,
+                    "team": team,
+                    "program": m.program,
+                })
                 if limit and len(out) >= limit:
                     return json.dumps(out)
         return json.dumps(out)
