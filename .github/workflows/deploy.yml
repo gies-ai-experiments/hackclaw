@@ -26,14 +26,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e '.[dev]'
 
-      - name: Run reminder-poller test suite
+      - name: Run suite
         run: |
           python -m pytest -q \
             tests/onboard/test_email_canonical.py \
             tests/onboard/test_templates.py \
             tests/onboard/test_reminder_config.py \
             tests/onboard/test_reminder_poller.py \
-            tests/onboard/test_sheet_io.py
+            tests/onboard/test_sheet_io.py \
+            tests/channels/test_telegram_channel.py \
+            tests/agent/test_admin_tools.py
 
   deploy:
     name: SSH deploy to Hetzner
