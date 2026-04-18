@@ -46,6 +46,34 @@ async def test_send_email_works_from_telegram() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_email_refuses_second_send_in_same_turn() -> None:
+    cb = AsyncMock()
+    tool = SendEmailTool(send_callback=cb)
+    tool.set_context(channel="telegram", chat_id="8590118736")
+
+    out1 = await tool.execute(to="a@b.com", subject="s", body="b")
+    assert "dispatched" in out1
+
+    out2 = await tool.execute(to="c@d.com", subject="s", body="b")
+    assert "already fired once this turn" in out2
+    assert "run_workflow" in out2
+    cb.assert_awaited_once()  # second one was refused
+
+
+@pytest.mark.asyncio
+async def test_send_email_start_turn_resets_guard() -> None:
+    cb = AsyncMock()
+    tool = SendEmailTool(send_callback=cb)
+    tool.set_context(channel="telegram", chat_id="8590118736")
+
+    await tool.execute(to="a@b.com", subject="s", body="b")
+    tool.start_turn()  # fresh turn
+    out2 = await tool.execute(to="c@d.com", subject="s", body="b")
+    assert "dispatched" in out2
+    assert cb.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_send_discord_rejects_non_telegram_channel() -> None:
     cb = AsyncMock()
     tool = SendDiscordTool(send_callback=cb)

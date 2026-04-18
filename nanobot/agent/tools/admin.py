@@ -66,11 +66,22 @@ class _AdminTool(Tool):
     )
 )
 class SendEmailTool(_AdminTool):
-    """Send an email via the configured SMTP channel."""
+    """Send an email via the configured SMTP channel.
+
+    To prevent the agent from bulk-blasting via parallel tool calls, we
+    track sends per 'turn' (identified by the chat_id stamp set during
+    set_context). The second send in the same turn is refused and the
+    agent is redirected to run_workflow.
+    """
 
     def __init__(self, send_callback: Any) -> None:
         super().__init__()
         self._send_callback = send_callback
+        self._sent_this_turn: dict[tuple[str, str], int] = {}
+
+    def start_turn(self) -> None:
+        """Called by the agent loop before each new user message."""
+        self._sent_this_turn.clear()
 
     @property
     def name(self) -> str:
@@ -79,8 +90,13 @@ class SendEmailTool(_AdminTool):
     @property
     def description(self) -> str:
         return (
-            "Send an email via the configured Gmail channel (SMTP). "
-            "Use for announcements, reminders, or 1-to-1 replies from admin. "
+            "Send ONE email to ONE recipient via the configured Gmail channel "
+            "(SMTP). Use ONLY for 1-to-1 messages from admin.\n\n"
+            "**DO NOT use this tool for bulk sends.** If the user asks you to "
+            "email multiple people (e.g. 'email everyone who applied', 'email "
+            "the Geese team', 'remind all applicants'), you MUST use "
+            "`run_workflow` with for_each instead — it previews the full "
+            "recipient list and lets the admin confirm before blasting.\n\n"
             "Only callable from the Telegram admin channel."
         )
 
@@ -88,6 +104,22 @@ class SendEmailTool(_AdminTool):
         err = self._gate()
         if err:
             return err
+
+        # Per-turn bulk-blast guard. If the agent tries to call send_email
+        # multiple times in the same turn (e.g. looping over applicants), we
+        # hard-refuse after the first and tell it to use run_workflow.
+        turn_key = (self._channel, self._chat_id)
+        count = self._sent_this_turn.get(turn_key, 0)
+        if count >= 1:
+            self._sent_this_turn[turn_key] = count + 1
+            return (
+                "Error: send_email already fired once this turn. For multiple "
+                "recipients, use run_workflow with for_each — it previews the "
+                "whole batch and requires admin confirmation. Do NOT loop "
+                "send_email directly."
+            )
+        self._sent_this_turn[turn_key] = count + 1
+
         msg = OutboundMessage(
             channel="email",
             chat_id=to.strip(),
@@ -349,13 +381,24 @@ class RunWorkflowTool(_AdminTool):
     @property
     def description(self) -> str:
         return (
-            "Execute a multi-step plan composed of other registered tools. "
-            "Each step is {tool, args, id?, for_each?}. Use 'id' to save a "
-            "result for later steps; use 'for_each': <saved-list-id> to loop. "
-            "Inside args, '{item.email}' is replaced per-iteration and "
-            "'{saved_id.field}' pulls from earlier steps. "
-            "Set dry_run=true FIRST to preview; re-run with dry_run=false "
-            "only after the admin confirms. Telegram-only."
+            "Execute a multi-step plan composed of other registered tools.\n\n"
+            "**USE THIS for ANY multi-recipient or bulk operation** — "
+            "'email all applicants', 'email the X team', 'post to all channels', "
+            "etc. Do NOT iterate send_email or send_discord yourself; put them "
+            "in a run_workflow plan with for_each.\n\n"
+            "Plan format: a list of steps. Each step is "
+            "{tool, args, id?, for_each?}. Use 'id' to save a result for later "
+            "steps; use 'for_each': <saved-list-id> to loop. Inside args, "
+            "'{item.email}' is replaced per-iteration and '{saved_id.field}' "
+            "pulls from earlier steps.\n\n"
+            "**MANDATORY two-step protocol:**\n"
+            "  1. Call with dry_run=true — the tool will read sheets etc. and "
+            "show the full recipient list + draft body without sending.\n"
+            "  2. Relay the preview back to the admin (count, draft, sample).\n"
+            "  3. WAIT for the admin to reply 'send', 'go', 'yes', or "
+            "equivalent explicit confirmation.\n"
+            "  4. Only then call with dry_run=false using the same plan.\n\n"
+            "Telegram-only."
         )
 
     async def execute(self, *, plan: list[dict[str, Any]], dry_run: bool = True, **_: Any) -> str:

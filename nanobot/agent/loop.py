@@ -585,6 +585,11 @@ class AgentLoop:
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()
+        # Reset per-turn guard on send_email (bulk-blast prevention).
+        if (send_email_tool := self.tools.get("send_email")) and hasattr(
+            send_email_tool, "start_turn"
+        ):
+            send_email_tool.start_turn()
 
         history = session.get_history(max_messages=0)
         knowledge_override = (msg.metadata or {}).get("_knowledge_override")
