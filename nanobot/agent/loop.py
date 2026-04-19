@@ -22,6 +22,7 @@ from nanobot.agent.tools.cron import CronTool
 from nanobot.agent.skills import BUILTIN_SKILLS_DIR
 from nanobot.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from nanobot.agent.tools.admin import (
+    CountApplicantsTool,
     DraftEmailTool,
     ListApplicantsTool,
     RunWorkflowTool,
@@ -294,6 +295,7 @@ class AgentLoop:
         self.tools.register(DraftEmailTool())
         self.tools.register(TriggerCycleTool())
         self.tools.register(ListApplicantsTool())
+        self.tools.register(CountApplicantsTool())
         self.tools.register(RunWorkflowTool(registry=self.tools))
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:
@@ -328,7 +330,7 @@ class AgentLoop:
         for name in (
             "message", "spawn", "cron",
             "send_email", "send_discord", "draft_email", "trigger_cycle",
-            "list_applicants", "run_workflow",
+            "list_applicants", "count_applicants", "run_workflow",
         ):
             if tool := self.tools.get(name):
                 if hasattr(tool, "set_context"):

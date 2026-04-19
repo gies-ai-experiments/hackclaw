@@ -328,6 +328,78 @@ class TriggerCycleTool(_AdminTool):
 
 @tool_parameters(
     tool_parameters_schema(
+        gies_only=BooleanSchema(
+            description="When true (default), count only Gies-eligible applicants (matches the list_applicants filter).",
+            default=True,
+        ),
+    )
+)
+class CountApplicantsTool(_AdminTool):
+    """Return the numeric count of applicants — LLM-safe for 'how many' questions.
+
+    LLMs are unreliable at counting long JSON arrays. This tool returns
+    a short string containing just the count, so the agent never has to
+    mentally count a list it got back from ``list_applicants``.
+    """
+
+    @property
+    def name(self) -> str:
+        return "count_applicants"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Return the number of unique applicants on the application sheet as "
+            "a short sentence (e.g. '87 Gies-eligible applicants'). **Use this "
+            "tool instead of list_applicants whenever the admin asks 'how "
+            "many' or any count question.** Do NOT try to count a JSON list "
+            "yourself — LLMs get it wrong. Telegram-only, read-only."
+        )
+
+    @property
+    def read_only(self) -> bool:
+        return True
+
+    async def execute(self, *, gies_only: bool = True, **_: Any) -> str:
+        err = self._gate()
+        if err:
+            return err
+
+        sa = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+        app_id = os.environ.get("GIES_SHEET_ID", "")
+        if not sa or not app_id:
+            return "Error: GOOGLE_SERVICE_ACCOUNT_JSON or GIES_SHEET_ID not configured"
+
+        from nanobot.onboard.email_canonical import canonical_illinois_email
+        from nanobot.onboard.parser import extract_members, is_gies_program
+        from nanobot.onboard.sheet_io import fetch_rows, open_client, open_first_worksheet
+
+        try:
+            client = open_client(sa)
+            ws = open_first_worksheet(client, app_id)
+            rows = fetch_rows(ws)
+        except Exception as exc:
+            return f"Error reading application sheet: {exc}"
+
+        count = 0
+        seen: set[str] = set()
+        for r in rows:
+            trimmed = r[1:] if r else r
+            for m in extract_members(trimmed):
+                canon = canonical_illinois_email(m.email)
+                if not canon or canon in seen:
+                    continue
+                seen.add(canon)
+                if gies_only and not is_gies_program(m.program):
+                    continue
+                count += 1
+
+        label = "Gies-eligible applicant" if gies_only else "applicant"
+        return f"{count} {label}{'s' if count != 1 else ''} on the application sheet right now."
+
+
+@tool_parameters(
+    tool_parameters_schema(
         limit=IntegerSchema(
             0,
             description="Max members to return (0 = all). Use small values while drafting to keep tokens low.",
