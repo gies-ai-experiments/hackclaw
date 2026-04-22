@@ -31,6 +31,10 @@ class HelpTicket:
     resolved_at: datetime | None = None
     queue_message_id: int | None = None
     solution: str | None = None
+    granted_user_ids: list[str] = field(default_factory=list)
+    """Discord user ids who received a view+connect override on ``online_room_id``
+    while this ticket was claimed. Populated on claim (every member of the
+    team's text channel), consumed on resolve/unclaim to revoke in bulk."""
 
 
 class TicketStore:

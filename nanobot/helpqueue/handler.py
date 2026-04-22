@@ -83,6 +83,21 @@ async def helpme_instant(
         )
         return
 
+    # Online must be fired from a team channel — the bot uses that channel's
+    # member list to figure out who on the team should get voice access.
+    if mode == "online":
+        parent_id = getattr(channel, "category_id", None)
+        if parent_id is None or str(parent_id) != TEAMS_CATEGORY_ID:
+            await interaction.response.send_message(
+                "Run `/helpme mode:online` from your **team's text channel** "
+                "(under the Teams category). That tells me who's on your team "
+                "so I can give everyone voice access — running it from a "
+                "different channel would either expose the voice to the "
+                "whole guild or leave your teammates locked out.",
+                ephemeral=True,
+            )
+            return
+
     # Auto-detect team name from channel name
     team_name = channel.name.replace("-", " ").title() if hasattr(channel, "name") else "Unknown Team"
 
@@ -220,6 +235,29 @@ async def _remove_mentor_from_channel(client: discord.Client, channel_id: int, u
 # ---------------------------------------------------------------------------
 # Online office-hours helpers (voice channel permission grants)
 # ---------------------------------------------------------------------------
+
+# Team channels live under this category in the Gies guild. /helpme online
+# must be fired from a channel in this category so the bot can use its
+# member list as the team roster.
+TEAMS_CATEGORY_ID = "1493806352139817172"
+
+
+async def _team_member_ids(client: discord.Client, text_channel_id: int) -> list[str]:
+    """Return Discord user ids of everyone who can see *text_channel_id*.
+
+    Mirrors the team roster: anyone who has view_channel on the team's text
+    channel is treated as a team member and gets voice access on claim.
+    Bots are filtered out so the bot doesn't try to grant itself access.
+    """
+    try:
+        channel = client.get_channel(text_channel_id)
+        if channel is None:
+            channel = await client.fetch_channel(text_channel_id)
+        members = getattr(channel, "members", None) or []
+        return [str(m.id) for m in members if not m.bot]
+    except Exception as e:
+        logger.warning("Failed to enumerate members for channel {}: {}", text_channel_id, e)
+        return []
 
 
 async def _grant_voice_access(client: discord.Client, voice_channel_id: str, user_id: str) -> None:
@@ -369,21 +407,35 @@ async def handle_claim(interaction: discord.Interaction, ticket_id: str) -> None
             logger.warning("Failed to notify team channel for ticket {}: {}", ticket_id, e)
         return
 
-    # --- Online-specific post-claim: grant participant access + DM ---
+    # --- Online-specific post-claim: grant team members access + DM ---
     store.pop_online(ticket_id)
-    if reserved_room and ticket.participant_id:
-        await _grant_voice_access(interaction.client, reserved_room, ticket.participant_id)
-        try:
-            user = interaction.client.get_user(int(ticket.participant_id))
-            if user is None:
-                user = await interaction.client.fetch_user(int(ticket.participant_id))
-            await user.send(
-                f"🌐 You're up! Mentor **{mentor_name}** claimed ticket **{ticket.id}**.\n"
-                f"Voice channel <#{reserved_room}> is now visible in your Discord sidebar — "
-                f"join it and the mentor will be there shortly."
-            )
-        except Exception as e:
-            logger.debug("Couldn't DM participant {} about claim: {}", ticket.participant_id, e)
+    if reserved_room:
+        team_ids = await _team_member_ids(interaction.client, ticket.channel_id)
+        # Always include the requester even if we somehow failed to enumerate
+        if ticket.participant_id and ticket.participant_id not in team_ids:
+            team_ids.insert(0, ticket.participant_id)
+        ticket.granted_user_ids = list(team_ids)
+        for uid in team_ids:
+            await _grant_voice_access(interaction.client, reserved_room, uid)
+        if ticket.participant_id:
+            try:
+                user = interaction.client.get_user(int(ticket.participant_id))
+                if user is None:
+                    user = await interaction.client.fetch_user(int(ticket.participant_id))
+                teammate_count = max(0, len(team_ids) - 1)
+                teammate_note = (
+                    f" Your {teammate_count} teammate{'s' if teammate_count != 1 else ''} on "
+                    f"<#{ticket.channel_id}> can join too — same channel shows up for them."
+                    if teammate_count > 0
+                    else ""
+                )
+                await user.send(
+                    f"🌐 You're up! Mentor **{mentor_name}** claimed ticket **{ticket.id}**.\n"
+                    f"Voice channel <#{reserved_room}> is now visible in your Discord sidebar — "
+                    f"join it and the mentor will be there shortly.{teammate_note}"
+                )
+            except Exception as e:
+                logger.debug("Couldn't DM participant {} about claim: {}", ticket.participant_id, e)
 
     # Tell everyone else in the queue their new position
     await _dm_position_updates(interaction.client, store)
@@ -437,10 +489,16 @@ async def handle_unclaim(interaction: discord.Interaction, ticket_id: str) -> No
             logger.warning("Failed to notify team channel for ticket {}: {}", ticket_id, e)
         return
 
-    # Online: release the voice room + revoke participant access
+    # Online: release the voice room + revoke everyone the team had access for
     store.release_room(ticket.id)
-    if prior_room and prior_participant:
-        await _revoke_voice_access(interaction.client, prior_room, prior_participant)
+    if prior_room:
+        granted = list(ticket_before.granted_user_ids) if ticket_before else []
+        ticket.granted_user_ids = []
+        if not granted and prior_participant:
+            granted = [prior_participant]
+        for uid in granted:
+            await _revoke_voice_access(interaction.client, prior_room, uid)
+    if prior_participant:
         try:
             user = interaction.client.get_user(int(prior_participant))
             if user is None:
@@ -535,17 +593,24 @@ async def handle_resolve_with_solution(
         except Exception as e:
             logger.warning("Failed to notify team channel for ticket {}: {}", ticket_id, e)
     else:
-        # Online: release the voice room + revoke participant access
+        # Online: release the voice room + revoke every team-member override
         store.release_room(ticket.id)
-        if prior_room and prior_participant:
-            await _revoke_voice_access(interaction.client, prior_room, prior_participant)
+        if prior_room:
+            granted = list(resolved_ticket.granted_user_ids)
+            resolved_ticket.granted_user_ids = []
+            if not granted and prior_participant:
+                granted = [prior_participant]
+            for uid in granted:
+                await _revoke_voice_access(interaction.client, prior_room, uid)
+        if prior_participant:
             try:
                 user = interaction.client.get_user(int(prior_participant))
                 if user is None:
                     user = await interaction.client.fetch_user(int(prior_participant))
                 await user.send(
-                    f"✅ Ticket **{ticket.id}** resolved. Hope that helped — you're free to leave "
-                    "the voice channel, and the office-hours room has been removed from your sidebar."
+                    f"✅ Ticket **{ticket.id}** resolved. Hope that helped — you and your team "
+                    "are free to leave the voice channel; the office-hours room has been "
+                    "removed from everyone's sidebar."
                 )
             except Exception as e:
                 logger.debug("Couldn't DM participant {} about resolve: {}", prior_participant, e)

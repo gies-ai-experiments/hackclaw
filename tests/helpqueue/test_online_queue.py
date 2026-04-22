@@ -120,3 +120,14 @@ def test_mode_field_defaults_to_in_person() -> None:
     assert t.mode == "in_person"
     assert t.participant_id is None
     assert t.online_room_id is None
+    assert t.granted_user_ids == []
+
+
+def test_granted_user_ids_is_independent_per_ticket() -> None:
+    """Mutating one ticket's granted list must not bleed into another's default."""
+    s = TicketStore()
+    a = _new_ticket(s, "A")
+    b = _new_ticket(s, "B")
+    s.get(a).granted_user_ids.append("user-1")
+    assert s.get(a).granted_user_ids == ["user-1"]
+    assert s.get(b).granted_user_ids == []
