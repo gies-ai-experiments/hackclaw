@@ -37,13 +37,24 @@ def get_store() -> TicketStore:
 
 async def helpme_instant(
     interaction: discord.Interaction,
+    *,
     location: str,
     problem: str,
+    mode: str,
     help_queue_channel_id: str,
     mentor_role_id: str,
+    office_hours_voice_ids: list[str] | None = None,
 ) -> None:
-    """Single-shot /helpme with location and problem as slash command params."""
+    """Single-shot /helpme.
+
+    *mode* is ``"in_person"`` or ``"online"``. For online tickets,
+    ``office_hours_voice_ids`` seeds the room pool used when a mentor
+    claims — without it, claim will fail with "no rooms configured".
+    """
     store = get_store()
+    if mode == "online" and office_hours_voice_ids:
+        store.configure_rooms(list(office_hours_voice_ids))
+
     channel = interaction.channel
     if channel is None:
         await interaction.response.send_message(
@@ -53,12 +64,21 @@ async def helpme_instant(
 
     channel_id = channel.id
 
-    # Check for existing open ticket
-    existing = store.get_open_by_channel(channel_id)
-    if existing is not None:
+    # For in-person, only one open ticket per team channel. Online does not
+    # use the team channel for delivery, so the per-channel lock doesn't apply.
+    if mode == "in_person":
+        existing = store.get_open_by_channel(channel_id)
+        if existing is not None:
+            await interaction.response.send_message(
+                f"This channel already has an open help request ({existing.id}). "
+                "Use `/resolved` to close it before opening a new one.",
+                ephemeral=True,
+            )
+            return
+
+    if mode == "in_person" and not location.strip():
         await interaction.response.send_message(
-            f"This channel already has an open help request ({existing.id}). "
-            "Use `/resolved` to close it before opening a new one.",
+            "Please include a location for in-person help (e.g. 'BIF 2007').",
             ephemeral=True,
         )
         return
@@ -66,7 +86,7 @@ async def helpme_instant(
     # Auto-detect team name from channel name
     team_name = channel.name.replace("-", " ").title() if hasattr(channel, "name") else "Unknown Team"
 
-    # Check for similar past solutions
+    # Check for similar past solutions (shared across both modes)
     from pathlib import Path
     from nanobot.helpqueue.solutions import SolutionStore, generate_embedding
 
@@ -96,19 +116,40 @@ async def helpme_instant(
                 )
                 return
 
-    # Create ticket
+    participant_id = str(interaction.user.id)
+
     ticket = store.create(
         team_name=team_name,
         channel_id=channel_id,
         location=location.strip(),
         description=problem.strip(),
+        mode="online" if mode == "online" else "in_person",
+        participant_id=participant_id,
     )
+    queue_position = -1
+    if ticket.mode == "online":
+        queue_position = store.enqueue_online(ticket.id)
 
-    # Confirm in team channel
-    await interaction.response.send_message(
-        f"Help request **{ticket.id}** created! A mentor will be with you shortly.\n"
-        f"**Location:** {ticket.location}\n**Problem:** {ticket.description}"
-    )
+    # Confirm to the participant (ephemeral for online — no need to clutter team channel)
+    if ticket.mode == "online":
+        configured = store.configured_rooms()
+        rooms_info = (
+            f"When a mentor claims your ticket, one of the office-hours voice "
+            f"channels ({', '.join(f'<#{r}>' for r in configured)}) will become "
+            f"visible in your sidebar — join it then."
+            if configured
+            else "Office-hours rooms aren't configured yet — ask an organizer."
+        )
+        await interaction.response.send_message(
+            f"🌐 Online help request **{ticket.id}** — you're **position #{queue_position}** in the queue.\n"
+            f"**Problem:** {ticket.description}\n\n{rooms_info}",
+            ephemeral=True,
+        )
+    else:
+        await interaction.response.send_message(
+            f"Help request **{ticket.id}** created! A mentor will be with you shortly.\n"
+            f"**Location:** {ticket.location}\n**Problem:** {ticket.description}"
+        )
 
     # Post embed + ClaimView to #help-queue
     try:
@@ -117,9 +158,16 @@ async def helpme_instant(
         if queue_channel is None:
             queue_channel = await client.fetch_channel(int(help_queue_channel_id))
 
-        embed = build_ticket_embed(ticket)
+        embed = build_ticket_embed(
+            ticket,
+            queue_position=queue_position if ticket.mode == "online" else None,
+        )
         view = ClaimView(ticket.id)
-        ping = f"<@&{mentor_role_id}> New help request!" if mentor_role_id else "New help request!"
+        if mentor_role_id:
+            mode_label = "🌐 online" if ticket.mode == "online" else "🏢 in-person"
+            ping = f"<@&{mentor_role_id}> new {mode_label} help request!"
+        else:
+            ping = "New help request!"
         queue_msg = await queue_channel.send(content=ping, embed=embed, view=view)
         ticket.queue_message_id = queue_msg.id
     except Exception as e:
@@ -170,27 +218,133 @@ async def _remove_mentor_from_channel(client: discord.Client, channel_id: int, u
 
 
 # ---------------------------------------------------------------------------
+# Online office-hours helpers (voice channel permission grants)
+# ---------------------------------------------------------------------------
+
+
+async def _grant_voice_access(client: discord.Client, voice_channel_id: str, user_id: str) -> None:
+    """Add a ``view_channel + connect`` override for *user_id* on *voice_channel_id*.
+
+    This makes a previously hidden voice channel appear in the user's
+    Discord sidebar within 1–2s of the call. Failures are logged but
+    non-fatal — the user just won't see the channel.
+    """
+    try:
+        channel = client.get_channel(int(voice_channel_id))
+        if channel is None:
+            channel = await client.fetch_channel(int(voice_channel_id))
+        guild = channel.guild
+        member = guild.get_member(int(user_id))
+        if member is None:
+            member = await guild.fetch_member(int(user_id))
+        await channel.set_permissions(
+            member,
+            view_channel=True,
+            connect=True,
+            speak=True,
+            reason="Online help ticket claimed — granting participant voice access",
+        )
+    except Exception as e:
+        logger.warning("Failed to grant voice access to user {} on {}: {}", user_id, voice_channel_id, e)
+
+
+async def _revoke_voice_access(client: discord.Client, voice_channel_id: str, user_id: str) -> None:
+    """Remove the participant's override on the office-hours voice channel.
+
+    Discord re-evaluates effective permissions within ~1s; if the user
+    is still connected they'll be auto-disconnected from the voice.
+    """
+    try:
+        channel = client.get_channel(int(voice_channel_id))
+        if channel is None:
+            channel = await client.fetch_channel(int(voice_channel_id))
+        guild = channel.guild
+        member = guild.get_member(int(user_id))
+        if member is None:
+            member = await guild.fetch_member(int(user_id))
+        await channel.set_permissions(
+            member, overwrite=None,
+            reason="Online help ticket resolved/unclaimed — revoking participant voice access",
+        )
+    except Exception as e:
+        logger.warning("Failed to revoke voice access from user {} on {}: {}", user_id, voice_channel_id, e)
+
+
+async def _dm_position_updates(client: discord.Client, store: TicketStore) -> None:
+    """DM every remaining online-queue participant their new 1-based position."""
+    for idx, tid in enumerate(store.online_queue_snapshot(), start=1):
+        t = store.get(tid)
+        if t is None or not t.participant_id:
+            continue
+        try:
+            user = client.get_user(int(t.participant_id))
+            if user is None:
+                user = await client.fetch_user(int(t.participant_id))
+            await user.send(
+                f"Queue update: your online help ticket **{t.id}** is now at **position #{idx}**."
+            )
+        except Exception as e:
+            logger.debug("Couldn't DM {} about new queue position: {}", t.participant_id, e)
+
+
+# ---------------------------------------------------------------------------
 # Claim / Unclaim handlers
 # ---------------------------------------------------------------------------
 
 
 async def handle_claim(interaction: discord.Interaction, ticket_id: str) -> None:
-    """Claim a ticket on behalf of the interacting mentor."""
+    """Claim a ticket on behalf of the interacting mentor.
+
+    For online tickets this also reserves one of the configured office-hours
+    voice channels and grants the participant a ``view_channel + connect``
+    override on it. If all rooms are busy, the claim is rejected with a
+    hint to wait for another session to resolve.
+    """
     store = get_store()
     mentor_id = str(interaction.user.id)
     mentor_name = interaction.user.display_name
 
+    ticket = store.get(ticket_id)
+    if ticket is None:
+        await interaction.response.send_message("Ticket not found.", ephemeral=True)
+        return
+
+    # --- Online-specific preflight: reserve a room BEFORE flipping state ---
+    reserved_room: str | None = None
+    if ticket.mode == "online":
+        if not store.configured_rooms():
+            await interaction.response.send_message(
+                "Online office-hours rooms aren't configured. Ask an organizer to "
+                "set `helpQueue.officeHoursVoiceIds` on the bot config.",
+                ephemeral=True,
+            )
+            return
+        if not store.any_room_free():
+            await interaction.response.send_message(
+                "Both office-hours rooms are in use right now. Wait until one "
+                "of the current sessions resolves, then claim again.",
+                ephemeral=True,
+            )
+            return
+        # Prefer the mentor's current voice channel if it's in the pool — lets them
+        # stay put between sessions.
+        prefer = None
+        if (
+            isinstance(interaction.user, discord.Member)
+            and interaction.user.voice
+            and interaction.user.voice.channel
+        ):
+            prefer = str(interaction.user.voice.channel.id)
+        reserved_room = store.reserve_room(ticket_id, prefer_room=prefer)
+
     success = store.claim(ticket_id, mentor_id=mentor_id, mentor_name=mentor_name)
     if not success:
+        if reserved_room is not None:
+            store.release_room(ticket_id)
         await interaction.response.send_message(
             "Could not claim this ticket. It may already be claimed or resolved.",
             ephemeral=True,
         )
-        return
-
-    ticket = store.get(ticket_id)
-    if ticket is None:
-        await interaction.response.send_message("Ticket not found.", ephemeral=True)
         return
 
     # Update queue embed: disable Claim, enable Unclaim + Resolve
@@ -201,25 +355,49 @@ async def handle_claim(interaction: discord.Interaction, ticket_id: str) -> None
     view.resolve_button.disabled = False
     await interaction.response.edit_message(embed=embed, view=view)
 
-    # Add mentor to team channel
-    await _add_mentor_to_channel(interaction.client, ticket.channel_id, interaction.user)
+    if ticket.mode == "in_person":
+        # Existing in-person flow: mentor joins the team channel
+        await _add_mentor_to_channel(interaction.client, ticket.channel_id, interaction.user)
+        try:
+            team_channel = interaction.client.get_channel(ticket.channel_id)
+            if team_channel is None:
+                team_channel = await interaction.client.fetch_channel(ticket.channel_id)
+            await team_channel.send(
+                f"Mentor **{mentor_name}** has joined the channel to help with {ticket.id}!"
+            )
+        except Exception as e:
+            logger.warning("Failed to notify team channel for ticket {}: {}", ticket_id, e)
+        return
 
-    # Notify the team channel
-    try:
-        team_channel = interaction.client.get_channel(ticket.channel_id)
-        if team_channel is None:
-            team_channel = await interaction.client.fetch_channel(ticket.channel_id)
-        await team_channel.send(
-            f"Mentor **{mentor_name}** has joined the channel to help with {ticket.id}!"
-        )
-    except Exception as e:
-        logger.warning("Failed to notify team channel for ticket {}: {}", ticket_id, e)
+    # --- Online-specific post-claim: grant participant access + DM ---
+    store.pop_online(ticket_id)
+    if reserved_room and ticket.participant_id:
+        await _grant_voice_access(interaction.client, reserved_room, ticket.participant_id)
+        try:
+            user = interaction.client.get_user(int(ticket.participant_id))
+            if user is None:
+                user = await interaction.client.fetch_user(int(ticket.participant_id))
+            await user.send(
+                f"🌐 You're up! Mentor **{mentor_name}** claimed ticket **{ticket.id}**.\n"
+                f"Voice channel <#{reserved_room}> is now visible in your Discord sidebar — "
+                f"join it and the mentor will be there shortly."
+            )
+        except Exception as e:
+            logger.debug("Couldn't DM participant {} about claim: {}", ticket.participant_id, e)
+
+    # Tell everyone else in the queue their new position
+    await _dm_position_updates(interaction.client, store)
 
 
 async def handle_unclaim(interaction: discord.Interaction, ticket_id: str) -> None:
     """Release a claimed ticket back to the open queue."""
     store = get_store()
     mentor_id = str(interaction.user.id)
+
+    ticket_before = store.get(ticket_id)
+    prior_room = ticket_before.online_room_id if ticket_before else None
+    prior_participant = ticket_before.participant_id if ticket_before else None
+    prior_mode = ticket_before.mode if ticket_before else None
 
     success = store.unclaim(ticket_id, mentor_id=mentor_id)
     if not success:
@@ -235,26 +413,46 @@ async def handle_unclaim(interaction: discord.Interaction, ticket_id: str) -> No
         return
 
     # Update queue embed: enable Claim, disable Unclaim + Resolve
-    embed = build_ticket_embed(ticket)
+    # Re-enqueue online tickets so position is recomputed for the embed.
+    queue_position: int | None = None
+    if ticket.mode == "online":
+        queue_position = store.enqueue_online(ticket.id)
+    embed = build_ticket_embed(ticket, queue_position=queue_position)
     view = ClaimView(ticket.id)
     view.claim_button.disabled = False
     view.unclaim_button.disabled = True
     view.resolve_button.disabled = True
     await interaction.response.edit_message(embed=embed, view=view)
 
-    # Remove mentor from team channel
-    await _remove_mentor_from_channel(interaction.client, ticket.channel_id, mentor_id)
+    if prior_mode == "in_person":
+        await _remove_mentor_from_channel(interaction.client, ticket.channel_id, mentor_id)
+        try:
+            team_channel = interaction.client.get_channel(ticket.channel_id)
+            if team_channel is None:
+                team_channel = await interaction.client.fetch_channel(ticket.channel_id)
+            await team_channel.send(
+                f"Mentor left the channel. {ticket.id} is back in the queue — waiting for another mentor."
+            )
+        except Exception as e:
+            logger.warning("Failed to notify team channel for ticket {}: {}", ticket_id, e)
+        return
 
-    # Notify the team channel
-    try:
-        team_channel = interaction.client.get_channel(ticket.channel_id)
-        if team_channel is None:
-            team_channel = await interaction.client.fetch_channel(ticket.channel_id)
-        await team_channel.send(
-            f"Mentor left the channel. {ticket.id} is back in the queue — waiting for another mentor."
-        )
-    except Exception as e:
-        logger.warning("Failed to notify team channel for ticket {}: {}", ticket_id, e)
+    # Online: release the voice room + revoke participant access
+    store.release_room(ticket.id)
+    if prior_room and prior_participant:
+        await _revoke_voice_access(interaction.client, prior_room, prior_participant)
+        try:
+            user = interaction.client.get_user(int(prior_participant))
+            if user is None:
+                user = await interaction.client.fetch_user(int(prior_participant))
+            await user.send(
+                f"The mentor unclaimed ticket **{ticket.id}**. You're back in the online queue — "
+                "hold tight and another mentor should pick you up shortly."
+            )
+        except Exception as e:
+            logger.debug("Couldn't DM participant {} about unclaim: {}", prior_participant, e)
+
+    await _dm_position_updates(interaction.client, store)
 
 
 async def handle_resolve_button(
@@ -307,6 +505,9 @@ async def handle_resolve_with_solution(
     # Save solution text on ticket
     resolved_ticket = store.get(ticket_id) or ticket
     resolved_ticket.solution = solution_text
+    prior_room = ticket.online_room_id
+    prior_participant = ticket.participant_id
+    prior_mode = ticket.mode
 
     # Cancel pending reminder
     reminder_task = _reminder_tasks.pop(ticket_id, None)
@@ -317,25 +518,39 @@ async def handle_resolve_with_solution(
     embed = build_ticket_embed(resolved_ticket)
     await interaction.response.edit_message(embed=embed, view=None)
 
-    # Remove mentor from team channel
-    if mentor_id:
-        await _remove_mentor_from_channel(interaction.client, ticket.channel_id, mentor_id)
-
-    # Notify team channel
-    time_msg = ""
-    if resolved_ticket.created_at and resolved_ticket.resolved_at:
-        minutes = int((resolved_ticket.resolved_at - resolved_ticket.created_at).total_seconds() / 60)
-        time_msg = f" (resolved in {minutes} min)"
-
-    try:
-        team_channel = interaction.client.get_channel(ticket.channel_id)
-        if team_channel is None:
-            team_channel = await interaction.client.fetch_channel(ticket.channel_id)
-        await team_channel.send(
-            f"Help request **{ticket.id}** has been resolved!{time_msg} Mentor has left the channel."
-        )
-    except Exception as e:
-        logger.warning("Failed to notify team channel for ticket {}: {}", ticket_id, e)
+    if prior_mode == "in_person":
+        if mentor_id:
+            await _remove_mentor_from_channel(interaction.client, ticket.channel_id, mentor_id)
+        time_msg = ""
+        if resolved_ticket.created_at and resolved_ticket.resolved_at:
+            minutes = int((resolved_ticket.resolved_at - resolved_ticket.created_at).total_seconds() / 60)
+            time_msg = f" (resolved in {minutes} min)"
+        try:
+            team_channel = interaction.client.get_channel(ticket.channel_id)
+            if team_channel is None:
+                team_channel = await interaction.client.fetch_channel(ticket.channel_id)
+            await team_channel.send(
+                f"Help request **{ticket.id}** has been resolved!{time_msg} Mentor has left the channel."
+            )
+        except Exception as e:
+            logger.warning("Failed to notify team channel for ticket {}: {}", ticket_id, e)
+    else:
+        # Online: release the voice room + revoke participant access
+        store.release_room(ticket.id)
+        if prior_room and prior_participant:
+            await _revoke_voice_access(interaction.client, prior_room, prior_participant)
+            try:
+                user = interaction.client.get_user(int(prior_participant))
+                if user is None:
+                    user = await interaction.client.fetch_user(int(prior_participant))
+                await user.send(
+                    f"✅ Ticket **{ticket.id}** resolved. Hope that helped — you're free to leave "
+                    "the voice channel, and the office-hours room has been removed from your sidebar."
+                )
+            except Exception as e:
+                logger.debug("Couldn't DM participant {} about resolve: {}", prior_participant, e)
+        # Anyone still in the online queue just moved up (or stayed put) — refresh their positions
+        await _dm_position_updates(interaction.client, store)
 
     # Save solution with embedding (async, non-blocking)
     asyncio.create_task(_save_solution(resolved_ticket, solution_text))

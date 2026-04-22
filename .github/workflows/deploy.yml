@@ -35,7 +35,8 @@ jobs:
             tests/onboard/test_reminder_poller.py \
             tests/onboard/test_sheet_io.py \
             tests/channels/test_telegram_channel.py \
-            tests/agent/test_admin_tools.py
+            tests/agent/test_admin_tools.py \
+            tests/helpqueue/test_online_queue.py
 
   deploy:
     name: SSH deploy to Hetzner

@@ -37,9 +37,18 @@ TYPING_INTERVAL_S = 8
 class HelpQueueConfig(Base):
     """Configuration for the help ticket queue."""
 
-    channel_id: str = ""          # #help-queue channel ID
-    mentor_role_id: str = ""      # @TechMentor role ID
-    reminder_minutes: int = 10    # Re-ping if unclaimed after N minutes
+    channel_id: str = ""              # #help-queue channel ID
+    mentor_role_id: str = ""          # @TechMentor role ID
+    reminder_minutes: int = 10        # Re-ping if unclaimed after N minutes
+    office_hours_voice_ids: list[str] = Field(default_factory=list)
+    """Voice channel IDs used as the online office-hours room pool.
+
+    Each ticket with ``mode="online"`` is assigned to one of these
+    voice channels when a mentor claims it. Permissions on these
+    channels must default-deny ``@everyone`` so only the bot (and
+    mentors) see them; the bot then grants the current participant a
+    ``view_channel + connect`` override for the duration of the session.
+    """
 
 
 class DiscordConfig(Base):
@@ -164,17 +173,33 @@ if DISCORD_AVAILABLE:
         def _register_app_commands(self) -> None:
             @self.tree.command(name="helpme", description="Request help from a technical mentor")
             @app_commands.describe(
-                location="Where are you? (e.g., BIF 2007, Wohlers 215)",
                 problem="What do you need help with?",
+                mode="How would you like the help? (in-person at your table, or online in a voice channel)",
+                location="If in-person: where you're sitting (e.g., BIF 2007). Ignored for online.",
+            )
+            @app_commands.choices(
+                mode=[
+                    app_commands.Choice(name="🏢 In-person (mentor comes to your table)", value="in_person"),
+                    app_commands.Choice(name="🌐 Online (voice channel office hours)", value="online"),
+                ],
             )
             async def helpme_command(
                 interaction: discord.Interaction,
-                location: str,
                 problem: str,
+                mode: app_commands.Choice[str],
+                location: str = "",
             ) -> None:
                 from nanobot.helpqueue.handler import helpme_instant
                 cfg = self._channel.config.help_queue
-                await helpme_instant(interaction, location, problem, cfg.channel_id, cfg.mentor_role_id)
+                await helpme_instant(
+                    interaction,
+                    location=location,
+                    problem=problem,
+                    mode=mode.value,
+                    help_queue_channel_id=cfg.channel_id,
+                    mentor_role_id=cfg.mentor_role_id,
+                    office_hours_voice_ids=cfg.office_hours_voice_ids,
+                )
 
             @self.tree.command(name="resolved", description="Mark your help request as resolved")
             async def resolved_command(interaction: discord.Interaction) -> None:

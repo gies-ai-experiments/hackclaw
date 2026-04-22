@@ -19,18 +19,40 @@ STATUS_LABELS = {
 }
 
 
-def build_ticket_embed(ticket: HelpTicket) -> discord.Embed:
-    """Build a Discord embed for a help ticket."""
+def build_ticket_embed(
+    ticket: HelpTicket,
+    *,
+    queue_position: int | None = None,
+) -> discord.Embed:
+    """Build a Discord embed for a help ticket.
+
+    *queue_position* (1-based) is shown for online tickets that are still
+    waiting in the queue. Ignored for in-person and for claimed/resolved.
+    """
+    mode_badge = "🌐 ONLINE" if ticket.mode == "online" else "🏢 IN-PERSON"
     embed = discord.Embed(
-        title=f"{ticket.id} — {ticket.team_name}",
+        title=f"{ticket.id} — {ticket.team_name}  ·  {mode_badge}",
         colour=STATUS_COLOURS.get(ticket.status, discord.Colour.greyple()),
     )
-    embed.add_field(name="Location", value=ticket.location, inline=True)
+    if ticket.mode == "in_person":
+        embed.add_field(name="Location", value=ticket.location, inline=True)
     embed.add_field(name="Status", value=STATUS_LABELS.get(ticket.status, ticket.status), inline=True)
+
+    if (
+        ticket.mode == "online"
+        and ticket.status == "open"
+        and queue_position is not None
+        and queue_position > 0
+    ):
+        embed.add_field(name="Queue position", value=f"#{queue_position}", inline=True)
+
     embed.add_field(name="Description", value=ticket.description, inline=False)
 
     if ticket.claimed_by_name:
         embed.add_field(name="Claimed by", value=ticket.claimed_by_name, inline=True)
+
+    if ticket.mode == "online" and ticket.online_room_id and ticket.status == "claimed":
+        embed.add_field(name="Voice room", value=f"<#{ticket.online_room_id}>", inline=True)
 
     if ticket.status == "resolved" and ticket.created_at and ticket.resolved_at:
         delta = ticket.resolved_at - ticket.created_at

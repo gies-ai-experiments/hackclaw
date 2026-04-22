@@ -52,7 +52,9 @@ class TestOpenTicketEmbed:
     def test_title_format(self) -> None:
         ticket = _make_ticket(id="HELP-042", team_name="BetaTeam", status="open")
         embed = build_ticket_embed(ticket)
-        assert embed.title == "HELP-042 \u2014 BetaTeam"
+        # Title now includes a mode badge (default in-person) suffix.
+        assert embed.title.startswith("HELP-042 \u2014 BetaTeam")
+        assert "IN-PERSON" in embed.title
 
     def test_location_field(self) -> None:
         ticket = _make_ticket(location="Lab 3")
