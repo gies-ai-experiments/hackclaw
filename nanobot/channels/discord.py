@@ -179,8 +179,8 @@ if DISCORD_AVAILABLE:
             )
             @app_commands.choices(
                 mode=[
-                    app_commands.Choice(name="🏢 In-person (mentor comes to your table)", value="in_person"),
-                    app_commands.Choice(name="🌐 Online (voice channel office hours)", value="online"),
+                    app_commands.Choice(name="In-person (mentor comes to your table)", value="in_person"),
+                    app_commands.Choice(name="Online (voice channel office hours)", value="online"),
                 ],
             )
             async def helpme_command(

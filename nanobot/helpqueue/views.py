@@ -29,7 +29,7 @@ def build_ticket_embed(
     *queue_position* (1-based) is shown for online tickets that are still
     waiting in the queue. Ignored for in-person and for claimed/resolved.
     """
-    mode_badge = "🌐 ONLINE" if ticket.mode == "online" else "🏢 IN-PERSON"
+    mode_badge = "ONLINE" if ticket.mode == "online" else "IN-PERSON"
     embed = discord.Embed(
         title=f"{ticket.id} — {ticket.team_name}  ·  {mode_badge}",
         colour=STATUS_COLOURS.get(ticket.status, discord.Colour.greyple()),

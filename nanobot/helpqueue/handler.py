@@ -156,7 +156,7 @@ async def helpme_instant(
             else "Office-hours rooms aren't configured yet — ask an organizer."
         )
         await interaction.response.send_message(
-            f"🌐 Online help request **{ticket.id}** — you're **position #{queue_position}** in the queue.\n"
+            f"Online help request **{ticket.id}** — you're **position #{queue_position}** in the queue.\n"
             f"**Problem:** {ticket.description}\n\n{rooms_info}",
             ephemeral=True,
         )
@@ -179,7 +179,7 @@ async def helpme_instant(
         )
         view = ClaimView(ticket.id)
         if mentor_role_id:
-            mode_label = "🌐 online" if ticket.mode == "online" else "🏢 in-person"
+            mode_label = "online" if ticket.mode == "online" else "in-person"
             ping = f"<@&{mentor_role_id}> new {mode_label} help request!"
         else:
             ping = "New help request!"
@@ -430,7 +430,7 @@ async def handle_claim(interaction: discord.Interaction, ticket_id: str) -> None
                     else ""
                 )
                 await user.send(
-                    f"🌐 You're up! Mentor **{mentor_name}** claimed ticket **{ticket.id}**.\n"
+                    f"You're up. Mentor **{mentor_name}** claimed ticket **{ticket.id}**.\n"
                     f"Voice channel <#{reserved_room}> is now visible in your Discord sidebar — "
                     f"join it and the mentor will be there shortly.{teammate_note}"
                 )
@@ -608,7 +608,7 @@ async def handle_resolve_with_solution(
                 if user is None:
                     user = await interaction.client.fetch_user(int(prior_participant))
                 await user.send(
-                    f"✅ Ticket **{ticket.id}** resolved. Hope that helped — you and your team "
+                    f"Ticket **{ticket.id}** resolved. Hope that helped — you and your team "
                     "are free to leave the voice channel; the office-hours room has been "
                     "removed from everyone's sidebar."
                 )
