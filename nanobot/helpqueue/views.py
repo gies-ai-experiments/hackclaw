@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import discord
+from loguru import logger
 
 from nanobot.helpqueue.ticket import HelpTicket
 
@@ -230,7 +231,12 @@ def build_dashboard_embed(
 
 
 class DashboardView(discord.ui.View):
-    """Organizer dashboard with team channel join/leave and ticket stats."""
+    """Organizer dashboard with team channel join/leave and ticket stats.
+
+    View lifetime is 30 min instead of the previous 5 min so organizers can
+    run ``/dashboard`` once and come back to use it throughout the session
+    without having to re-issue the command.
+    """
 
     def __init__(
         self,
@@ -239,7 +245,7 @@ class DashboardView(discord.ui.View):
         help_queue_channel_id: str,
         mentor_role_id: str,
     ) -> None:
-        super().__init__(timeout=300)
+        super().__init__(timeout=1800)
         self.teams_category_id = teams_category_id
         self.help_queue_channel_id = help_queue_channel_id
         self.mentor_role_id = mentor_role_id
@@ -261,6 +267,10 @@ class DashboardView(discord.ui.View):
         self, interaction: discord.Interaction, select: discord.ui.Select,
     ) -> None:
         self.selected_channel_id = select.values[0] if select.values else None
+        logger.info(
+            "Dashboard select by user={} -> {!r}",
+            interaction.user.id, self.selected_channel_id,
+        )
         await interaction.response.defer()
 
     @discord.ui.button(label="Join", style=discord.ButtonStyle.success, row=2)
@@ -269,7 +279,8 @@ class DashboardView(discord.ui.View):
     ) -> None:
         if not self.selected_channel_id or self.selected_channel_id == "none":
             await interaction.response.send_message(
-                "Select a team channel first.", ephemeral=True,
+                "Select a team channel first (use the dropdown above).",
+                ephemeral=True,
             )
             return
         try:
@@ -278,20 +289,43 @@ class DashboardView(discord.ui.View):
                 channel = await interaction.client.fetch_channel(
                     int(self.selected_channel_id),
                 )
+            if channel is None:
+                raise LookupError(
+                    f"channel id {self.selected_channel_id} not found in this guild"
+                )
+            member = interaction.user
+            if not isinstance(member, discord.Member) and interaction.guild:
+                member = interaction.guild.get_member(interaction.user.id) or (
+                    await interaction.guild.fetch_member(interaction.user.id)
+                )
             await channel.set_permissions(
-                interaction.user,
+                member,
                 view_channel=True,
                 send_messages=True,
                 read_message_history=True,
                 reason="Organizer joined via dashboard",
             )
             await interaction.response.send_message(
-                f"Joined <#{self.selected_channel_id}>!", ephemeral=True,
+                f"Joined <#{self.selected_channel_id}>.", ephemeral=True,
+            )
+            logger.info(
+                "Dashboard join ok user={} -> channel={} ({})",
+                interaction.user.id, self.selected_channel_id,
+                getattr(channel, "name", "?"),
             )
         except Exception as e:
-            await interaction.response.send_message(
-                f"Failed to join: {e}", ephemeral=True,
+            logger.exception(
+                "Dashboard join failed user={} target={}: {}",
+                interaction.user.id, self.selected_channel_id, e,
             )
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"Failed to join: {type(e).__name__}: {e}", ephemeral=True,
+                )
+            else:
+                await interaction.followup.send(
+                    f"Failed to join: {type(e).__name__}: {e}", ephemeral=True,
+                )
 
     @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary, row=2)
     async def leave_button(
@@ -319,9 +353,18 @@ class DashboardView(discord.ui.View):
                 f"Left <#{self.selected_channel_id}>.", ephemeral=True,
             )
         except Exception as e:
-            await interaction.response.send_message(
-                f"Failed to leave: {e}", ephemeral=True,
+            logger.exception(
+                "Dashboard leave failed user={} target={}: {}",
+                interaction.user.id, self.selected_channel_id, e,
             )
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"Failed to leave: {type(e).__name__}: {e}", ephemeral=True,
+                )
+            else:
+                await interaction.followup.send(
+                    f"Failed to leave: {type(e).__name__}: {e}", ephemeral=True,
+                )
 
     @discord.ui.button(
         label="Refresh", style=discord.ButtonStyle.primary, emoji="\U0001f504", row=2,
