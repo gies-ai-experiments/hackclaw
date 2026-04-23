@@ -231,6 +231,53 @@ if DISCORD_AVAILABLE:
                 cfg = self._channel.config.help_queue
                 await handle_resolve_command(interaction, help_queue_channel_id=cfg.channel_id)
 
+            @self.tree.command(
+                name="introduce",
+                description="Meet hackclaw — what the bot can do and how to use it",
+            )
+            async def introduce_command(interaction: discord.Interaction) -> None:
+                TEAMS_CATEGORY_ID = "1493806352139817172"
+                parent_id = getattr(interaction.channel, "category_id", None)
+                if parent_id is None or str(parent_id) != TEAMS_CATEGORY_ID:
+                    await interaction.response.send_message(
+                        "Run `/introduce` from your **team's text channel** "
+                        "(under the Teams category). The intro is scoped to "
+                        "individual team channels so it doesn't spam the "
+                        "general chat.",
+                        ephemeral=True,
+                    )
+                    return
+                team = getattr(interaction.channel, "name", "your team")
+                team_pretty = team.replace("-", " ").title() if team else "your team"
+                intro = (
+                    f"Hi **{team_pretty}** — I'm **hackclaw**, the AI assistant for the "
+                    "Gies AI for Impact Challenge. Quick tour of what I can do in this channel:\n\n"
+                    "**Ask me anything about the event.** Mention me (`@hackclaw …`) and "
+                    "I'll pull from the event knowledge base — schedule, rooms, tracks, "
+                    "judging, Copilot Studio reference, prior teams' help-ticket resolutions. "
+                    "Examples:\n"
+                    "• `@hackclaw what time is check-in?`\n"
+                    "• `@hackclaw where is the opening ceremony?`\n"
+                    "• `@hackclaw what is Copilot Studio?`\n"
+                    "• `@hackclaw how do I connect Excel to my agent?`\n\n"
+                    "**Slash commands available to your team:**\n"
+                    "• `/introduce` — this message.\n"
+                    "• `/helpme problem:<what's wrong> mode:<in-person|online>` — "
+                    "creates a help ticket. In-person routes a mentor to your table; "
+                    "online puts your whole team into a private voice channel with "
+                    "a mentor once claimed.\n"
+                    "• `/resolved` — close an open ticket (claimed mentor only).\n\n"
+                    "**Things to know:**\n"
+                    "• Submissions are due **1:00 PM on Apr 24**. Apply here: "
+                    "<https://forms.gle/Az8PGE1u8rwwkFWy8>.\n"
+                    "• Event is **BIF**, April 23–24. Check-in starts **4:30 PM Thursday**, BIF West.\n"
+                    "• Mentor office hours + workshops are posted in the organizing channel; "
+                    "ask me for specific times.\n"
+                    "• If I give a wrong answer, correct me in the thread — I'll use that "
+                    "context for the rest of your team's conversation."
+                )
+                await interaction.response.send_message(intro)
+
             @self.tree.command(name="dashboard", description="Show the organizer dashboard")
             async def dashboard_command(interaction: discord.Interaction) -> None:
                 ORGANIZING_CHANNEL_ID = "1493801335831789568"
