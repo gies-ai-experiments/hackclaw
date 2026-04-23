@@ -57,7 +57,12 @@ class DiscordConfig(Base):
     enabled: bool = False
     token: str = ""
     allow_from: list[str] = Field(default_factory=list)
-    intents: int = 37377
+    intents: int = 53763
+    # GUILDS | GUILD_MEMBERS | GUILD_INVITES | GUILD_MESSAGES |
+    # DIRECT_MESSAGES | MESSAGE_CONTENT.
+    # GUILD_MEMBERS is privileged — must be toggled on in the Discord
+    # Developer Portal ("Server Members Intent") or on_member_join never
+    # fires.
     group_policy: Literal["mention", "open"] = "mention"
     read_receipt_emoji: str = "👀"
     working_emoji: str = "🔧"
@@ -74,6 +79,8 @@ if DISCORD_AVAILABLE:
             super().__init__(intents=intents)
             self._channel = channel
             self.tree = app_commands.CommandTree(self)
+            from nanobot.channels.invite_tracker import InviteTracker
+            self._invite_tracker = InviteTracker()
             self._register_app_commands()
 
         async def on_ready(self) -> None:
@@ -117,6 +124,23 @@ if DISCORD_AVAILABLE:
                 )
             except Exception as e:
                 logger.warning("Dashboard ensure failed: {}", e)
+
+            # Snapshot current invite uses so on_member_join can diff
+            # and detect which invite a new member used.
+            for guild in self.guilds:
+                await self._invite_tracker.refresh_guild(guild)
+
+        async def on_member_join(self, member: discord.Member) -> None:
+            from nanobot.channels.invite_tracker import on_member_join_assign_role
+            await on_member_join_assign_role(self._invite_tracker, member)
+
+        async def on_invite_create(self, invite: discord.Invite) -> None:
+            if invite.guild is not None:
+                await self._invite_tracker.refresh_guild(invite.guild)
+
+        async def on_invite_delete(self, invite: discord.Invite) -> None:
+            if invite.guild is not None:
+                await self._invite_tracker.refresh_guild(invite.guild)
 
         async def on_message(self, message: discord.Message) -> None:
             await self._channel._handle_discord_message(message)
