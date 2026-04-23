@@ -149,16 +149,46 @@ if DISCORD_AVAILABLE:
             # and detect which invite a new member used.
             for guild in self.guilds:
                 await self._invite_tracker.refresh_guild(guild)
+            # Background refresh guards against stale cache when invites
+            # are created out-of-band (e.g. REST API from the rollout
+            # script) and the on_invite_create gateway event is missed
+            # or delayed. Runs forever; 15s polls are cheap — one API
+            # call per guild.
+            if not hasattr(self, "_invite_refresh_task") or self._invite_refresh_task.done():
+                self._invite_refresh_task = asyncio.create_task(self._invite_refresh_loop())
+
+        async def _invite_refresh_loop(self) -> None:
+            while not self.is_closed():
+                try:
+                    await asyncio.sleep(15)
+                    for guild in self.guilds:
+                        await self._invite_tracker.refresh_guild(guild)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.warning("invite refresh loop error: {}", e)
 
         async def on_member_join(self, member: discord.Member) -> None:
             from nanobot.channels.invite_tracker import on_member_join_assign_role
             await on_member_join_assign_role(self._invite_tracker, member)
 
         async def on_invite_create(self, invite: discord.Invite) -> None:
+            logger.info(
+                "on_invite_create fired: code={} guild={} uses={} max_uses={}",
+                invite.code,
+                invite.guild.id if invite.guild else None,
+                invite.uses,
+                invite.max_uses,
+            )
             if invite.guild is not None:
                 await self._invite_tracker.refresh_guild(invite.guild)
 
         async def on_invite_delete(self, invite: discord.Invite) -> None:
+            logger.info(
+                "on_invite_delete fired: code={} guild={}",
+                invite.code,
+                invite.guild.id if invite.guild else None,
+            )
             if invite.guild is not None:
                 await self._invite_tracker.refresh_guild(invite.guild)
 
