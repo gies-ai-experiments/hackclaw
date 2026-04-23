@@ -399,3 +399,76 @@ Credits consumed depend on agent design, interaction frequency, and features use
 | Training Path | learn.microsoft.com/training/paths/create-extend-custom-copilots-microsoft-copilot-studio |
 | Multi-Agent Labs | microsoft.github.io/mcs-labs/labs/mcs-multi-agent |
 | Adoption Hub | adoption.microsoft.com/en-us/ai-agents/copilot-studio |
+
+---
+
+## 15. Mental Model (Buildathon Slide Deck)
+
+> **Source:** _Copilot Studio Mental Model_ by Vishal Sachdev — the live slide deck at
+> [gies-ai-experiments.github.io/gies-buildathon/docs/slides-mental-model](https://gies-ai-experiments.github.io/gies-buildathon/docs/slides-mental-model/dist/index.html).
+> Summarised here so the agent can answer "what is Copilot Studio?", "what can I build?", and "where do I start?" directly from memory.
+
+### What is Copilot Studio?
+
+- Microsoft's **low-code platform** to build AI agents and automations
+- Describe what you want in **plain language** — the AI helps build it
+- Already connected to your **Microsoft 365** data (Outlook, Teams, SharePoint, Excel, Planner, Forms, OneDrive, Word)
+- Access at **copilotstudio.microsoft.com**
+
+On the home screen it asks: **"What would you like to build?"** — Agent or Workflow.
+
+### Two Things You Can Build
+
+| | **Agent** | **Workflow (Agent Flow)** |
+|---|---|---|
+| What it is | A chat interface that **knows things** and **does things** | An automation that **runs on a trigger** |
+| Starts from | A user asking a question | Schedule, event, or manual start |
+| Determinism | Uses AI to understand intent | Deterministic — same input, same output |
+| Multi-step | Primarily single-turn per question | Multi-step, chain actions together |
+| Typical use | *"What's our PTO policy?"* | *"Every Monday 8am, summarize my emails"* |
+
+**Key insight:** An agent can trigger a workflow **mid-conversation**. That's the bridge — the agent handles the natural-language part, the workflow handles the deterministic multi-step automation.
+
+### Inside an Agent — Building Blocks
+
+```
+YOUR AGENT
+├── Instructions   — personality, rules, guardrails (up to 8,000 chars)
+├── Knowledge      — websites, SharePoint, uploaded files (RAG)
+├── Topics         — structured conversation paths with branching
+├── Tools          — single-step connectors (send email, read Excel)
+└── Agent Flows    — multi-step automations the agent can trigger
+```
+
+**You don't need all of these.** Knowledge alone gets you a working chatbot in 10 minutes.
+
+### What Can Connect?
+
+**Works out of the box** — Microsoft-native, real-time API calls, no admin approval:
+
+- Outlook · Teams · Planner · Excel · SharePoint · OneDrive · Word · Forms
+
+**Needs admin approval** — external connectors, enterprise security auth required:
+
+- Asana · ServiceNow · Salesforce · Custom APIs
+
+**For the hackathon:** stick to Microsoft-native connectors. They just work.
+
+### From Chatbot to Agent — Progression Levels
+
+| Level | What to add | Example | Time to build |
+|---|---|---|---|
+| **1. Chatbot** | Knowledge only | *"Ask me about Gies programs"* | 10 min |
+| **2. Structured** | + Topics with branching | *"Which program?"* → MBA / MSBA / Undergrad | 30 min |
+| **3. Connected** | + Tools (connectors) | *"I'll create a Planner task for your appointment"* | 1–2 hr |
+| **4. Automated** | + Agent Flows | *"Email advisor + log in Excel + post to Teams"* | 2–4 hr |
+| **5. Multi-agent** | + Sub-agents | *"Let me hand you to our financial aid agent"* | 4+ hr |
+
+**Hackathon target:** aim for Level 3–4. Level 5 is the moonshot.
+
+### Where to Get Help
+
+- **Copilot inside Studio** — click the Copilot button in Studio and ask in plain English how to do things.
+- **MS Learn Docs** — [learn.microsoft.com/copilot-studio](https://learn.microsoft.com/copilot-studio) — has its own built-in chat assistant.
+- **ChatGPT or Claude** — *"How do I connect Excel to my Copilot Studio agent?"* actually works; these tools know the platform.
+- **Mentors & teammates** — Brian & James (CIO AI team) and your teammates. Pair up instead of solo-debugging.
