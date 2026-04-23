@@ -208,7 +208,13 @@ def build_dashboard_embed(
     resolved_count: int,
     team_count: int,
 ) -> discord.Embed:
-    """Build the organizer dashboard embed."""
+    """Build the organizer dashboard embed.
+
+    The footer text includes :data:`DASHBOARD_MARKER` so
+    :func:`ensure_dashboard_posted` can identify and edit-in-place any
+    existing dashboard message across bot restarts instead of spawning
+    duplicates.
+    """
     embed = discord.Embed(
         title="Hackclaw Organizer Dashboard",
         colour=discord.Colour(0x9B59B6),
@@ -216,9 +222,9 @@ def build_dashboard_embed(
     embed.add_field(
         name="Help Queue",
         value=(
-            f"\U0001f7e0 Open: **{open_count}**\n"
-            f"\U0001f535 Claimed: **{claimed_count}**\n"
-            f"\U0001f7e2 Resolved: **{resolved_count}**"
+            f"Open: **{open_count}**\n"
+            f"Claimed: **{claimed_count}**\n"
+            f"Resolved: **{resolved_count}**"
         ),
         inline=True,
     )
@@ -227,15 +233,119 @@ def build_dashboard_embed(
         value=f"**{team_count}** teams found",
         inline=True,
     )
+    embed.set_footer(text=DASHBOARD_MARKER)
     return embed
+
+
+async def ensure_dashboard_posted(
+    client: discord.Client,
+    *,
+    organizing_channel_id: str,
+    teams_category_id: str,
+    help_queue_channel_id: str,
+    mentor_role_id: str,
+) -> None:
+    """Make sure a live dashboard message exists in the organizing channel.
+
+    Scans the last 50 messages for one whose embed footer contains
+    :data:`DASHBOARD_MARKER`. If found: edit it in place with fresh counts
+    and team list (so a bot restart recovers the existing message without
+    leaving a stale one). If not found: post a new one.
+
+    Safe to call idempotently on every ``on_ready`` — it never posts a
+    second dashboard when one already exists.
+    """
+    try:
+        channel = client.get_channel(int(organizing_channel_id))
+        if channel is None:
+            channel = await client.fetch_channel(int(organizing_channel_id))
+    except Exception as exc:
+        logger.warning("Dashboard: can't open organizing channel {}: {}",
+                       organizing_channel_id, exc)
+        return
+
+    from nanobot.helpqueue.handler import get_store
+    store = get_store()
+    open_count = sum(1 for t in store._tickets.values() if t.status == "open")
+    claimed_count = sum(1 for t in store._tickets.values() if t.status == "claimed")
+    resolved_count = sum(1 for t in store._tickets.values() if t.status == "resolved")
+
+    guild = getattr(channel, "guild", None)
+    team_channels: list[tuple[str, str]] = []
+    if guild is not None:
+        try:
+            category = guild.get_channel(int(teams_category_id))
+            if category is not None:
+                team_channels = [
+                    (str(ch.id), ch.name)
+                    for ch in category.channels
+                    if isinstance(ch, discord.TextChannel)
+                ]
+        except Exception as exc:
+            logger.warning("Dashboard: can't enumerate team channels: {}", exc)
+
+    embed = build_dashboard_embed(open_count, claimed_count, resolved_count, len(team_channels))
+    view = DashboardView(
+        team_channels=team_channels,
+        teams_category_id=teams_category_id,
+        help_queue_channel_id=help_queue_channel_id,
+        mentor_role_id=mentor_role_id,
+    )
+
+    # Look for an existing dashboard to edit in place.
+    me = getattr(client, "user", None)
+    me_id = me.id if me is not None else None
+    existing = None
+    try:
+        async for msg in channel.history(limit=50):
+            if me_id is not None and msg.author.id != me_id:
+                continue
+            if not msg.embeds:
+                continue
+            footer = msg.embeds[0].footer.text if msg.embeds[0].footer else ""
+            if footer and DASHBOARD_MARKER in footer:
+                existing = msg
+                break
+    except Exception as exc:
+        logger.warning("Dashboard: history scan failed: {}", exc)
+
+    try:
+        if existing is not None:
+            await existing.edit(embed=embed, view=view)
+            logger.info("Dashboard: updated existing message {}", existing.id)
+        else:
+            sent = await channel.send(embed=embed, view=view)
+            logger.info("Dashboard: posted new message {}", sent.id)
+    except Exception as exc:
+        logger.exception("Dashboard: post/update failed: {}", exc)
+
+
+# Module-level tracker for "which channel did which user pick from which
+# dashboard message" — keyed by (message_id, user_id) so multiple organizers
+# can use the same persistent dashboard concurrently without stepping on
+# each other's selections, and so a restart wipes stale state cleanly.
+_dashboard_selections: dict[tuple[int, int], str] = {}
+
+# Marker used to identify the persistent dashboard message across bot
+# restarts when scanning the organizing channel's recent history. Bumping
+# the version string forces a fresh dashboard to be posted (old ones
+# stop matching on startup + get ignored).
+DASHBOARD_MARKER = "hackclaw-dashboard-v1"
 
 
 class DashboardView(discord.ui.View):
     """Organizer dashboard with team channel join/leave and ticket stats.
 
-    View lifetime is 30 min instead of the previous 5 min so organizers can
-    run ``/dashboard`` once and come back to use it throughout the session
-    without having to re-issue the command.
+    Persistent view (``timeout=None``) — the dashboard is posted once to
+    the organizing channel at bot startup and stays there for the life
+    of the event. Buttons keep working across bot restarts because
+    they're registered with stable ``custom_id``s via ``add_view()`` in
+    the gateway's ``setup_hook``.
+
+    Per-user selection state lives in the module-level
+    :data:`_dashboard_selections` dict rather than on the view instance,
+    since the view instance is shared across all interactions on the
+    single persistent message.
     """
 
     def __init__(
@@ -245,54 +355,60 @@ class DashboardView(discord.ui.View):
         help_queue_channel_id: str,
         mentor_role_id: str,
     ) -> None:
-        super().__init__(timeout=1800)
+        super().__init__(timeout=None)
         self.teams_category_id = teams_category_id
         self.help_queue_channel_id = help_queue_channel_id
         self.mentor_role_id = mentor_role_id
-        self.selected_channel_id: str | None = None
 
-        # Build select menu from team channels
         if team_channels:
             options = [
                 discord.SelectOption(label=name, value=cid)
-                for cid, name in team_channels[:25]  # Discord max 25 options
+                for cid, name in team_channels[:25]
             ]
         else:
             options = [discord.SelectOption(label="No teams found", value="none")]
-
         self.channel_select.options = options
 
-    @discord.ui.select(placeholder="Select a team channel...")
+    @discord.ui.select(
+        custom_id="dashboard:v2:channel_select",
+        placeholder="Select a team channel...",
+    )
     async def channel_select(
         self, interaction: discord.Interaction, select: discord.ui.Select,
     ) -> None:
-        self.selected_channel_id = select.values[0] if select.values else None
-        logger.info(
-            "Dashboard select by user={} -> {!r}",
-            interaction.user.id, self.selected_channel_id,
-        )
+        if select.values and interaction.message:
+            _dashboard_selections[(interaction.message.id, interaction.user.id)] = select.values[0]
+            logger.info(
+                "Dashboard select: msg={} user={} -> {!r}",
+                interaction.message.id, interaction.user.id, select.values[0],
+            )
         await interaction.response.defer()
 
-    @discord.ui.button(label="Join", style=discord.ButtonStyle.success, row=2)
+    def _get_selection(self, interaction: discord.Interaction) -> str | None:
+        if interaction.message is None:
+            return None
+        return _dashboard_selections.get((interaction.message.id, interaction.user.id))
+
+    @discord.ui.button(
+        label="Join", style=discord.ButtonStyle.success, row=2,
+        custom_id="dashboard:v2:join",
+    )
     async def join_button(
         self, interaction: discord.Interaction, button: discord.ui.Button,
     ) -> None:
-        if not self.selected_channel_id or self.selected_channel_id == "none":
+        sel = self._get_selection(interaction)
+        if not sel or sel == "none":
             await interaction.response.send_message(
-                "Select a team channel first (use the dropdown above).",
+                "Pick a team channel from the dropdown above first.",
                 ephemeral=True,
             )
             return
         try:
-            channel = interaction.client.get_channel(int(self.selected_channel_id))
+            channel = interaction.client.get_channel(int(sel))
             if channel is None:
-                channel = await interaction.client.fetch_channel(
-                    int(self.selected_channel_id),
-                )
+                channel = await interaction.client.fetch_channel(int(sel))
             if channel is None:
-                raise LookupError(
-                    f"channel id {self.selected_channel_id} not found in this guild"
-                )
+                raise LookupError(f"channel id {sel} not found in this guild")
             member = interaction.user
             if not isinstance(member, discord.Member) and interaction.guild:
                 member = interaction.guild.get_member(interaction.user.id) or (
@@ -306,17 +422,16 @@ class DashboardView(discord.ui.View):
                 reason="Organizer joined via dashboard",
             )
             await interaction.response.send_message(
-                f"Joined <#{self.selected_channel_id}>.", ephemeral=True,
+                f"Joined <#{sel}>.", ephemeral=True,
             )
             logger.info(
                 "Dashboard join ok user={} -> channel={} ({})",
-                interaction.user.id, self.selected_channel_id,
-                getattr(channel, "name", "?"),
+                interaction.user.id, sel, getattr(channel, "name", "?"),
             )
         except Exception as e:
             logger.exception(
                 "Dashboard join failed user={} target={}: {}",
-                interaction.user.id, self.selected_channel_id, e,
+                interaction.user.id, sel, e,
             )
             if not interaction.response.is_done():
                 await interaction.response.send_message(
@@ -327,21 +442,24 @@ class DashboardView(discord.ui.View):
                     f"Failed to join: {type(e).__name__}: {e}", ephemeral=True,
                 )
 
-    @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(
+        label="Leave", style=discord.ButtonStyle.secondary, row=2,
+        custom_id="dashboard:v2:leave",
+    )
     async def leave_button(
         self, interaction: discord.Interaction, button: discord.ui.Button,
     ) -> None:
-        if not self.selected_channel_id or self.selected_channel_id == "none":
+        sel = self._get_selection(interaction)
+        if not sel or sel == "none":
             await interaction.response.send_message(
-                "Select a team channel first.", ephemeral=True,
+                "Pick a team channel from the dropdown above first.",
+                ephemeral=True,
             )
             return
         try:
-            channel = interaction.client.get_channel(int(self.selected_channel_id))
+            channel = interaction.client.get_channel(int(sel))
             if channel is None:
-                channel = await interaction.client.fetch_channel(
-                    int(self.selected_channel_id),
-                )
+                channel = await interaction.client.fetch_channel(int(sel))
             guild = channel.guild
             member = guild.get_member(interaction.user.id)
             if member is None:
@@ -350,12 +468,12 @@ class DashboardView(discord.ui.View):
                 member, overwrite=None, reason="Organizer left via dashboard",
             )
             await interaction.response.send_message(
-                f"Left <#{self.selected_channel_id}>.", ephemeral=True,
+                f"Left <#{sel}>.", ephemeral=True,
             )
         except Exception as e:
             logger.exception(
                 "Dashboard leave failed user={} target={}: {}",
-                interaction.user.id, self.selected_channel_id, e,
+                interaction.user.id, sel, e,
             )
             if not interaction.response.is_done():
                 await interaction.response.send_message(
@@ -368,6 +486,7 @@ class DashboardView(discord.ui.View):
 
     @discord.ui.button(
         label="Refresh", style=discord.ButtonStyle.primary, emoji="\U0001f504", row=2,
+        custom_id="dashboard:v2:refresh",
     )
     async def refresh_button(
         self, interaction: discord.Interaction, button: discord.ui.Button,

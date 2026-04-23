@@ -103,12 +103,36 @@ if DISCORD_AVAILABLE:
             except Exception as e:
                 logger.warning("Failed to clear global commands: {}", e)
 
+            # Post or refresh the persistent organizer dashboard so
+            # /dashboard isn't needed for routine use.
+            try:
+                from nanobot.helpqueue.views import ensure_dashboard_posted
+                cfg = self._channel.config.help_queue
+                await ensure_dashboard_posted(
+                    self,
+                    organizing_channel_id="1493801335831789568",
+                    teams_category_id="1493806352139817172",
+                    help_queue_channel_id=cfg.channel_id,
+                    mentor_role_id=cfg.mentor_role_id,
+                )
+            except Exception as e:
+                logger.warning("Dashboard ensure failed: {}", e)
+
         async def on_message(self, message: discord.Message) -> None:
             await self._channel._handle_discord_message(message)
 
         async def setup_hook(self) -> None:
-            from nanobot.helpqueue.views import ClaimView
+            from nanobot.helpqueue.views import ClaimView, DashboardView
             self.add_view(ClaimView(""))
+            # Register the persistent dashboard view so its buttons keep
+            # working across bot restarts. team_channels=[] → the select
+            # re-populates on the next refresh / post.
+            self.add_view(DashboardView(
+                team_channels=[],
+                teams_category_id="1493806352139817172",
+                help_queue_channel_id="",
+                mentor_role_id="",
+            ))
 
         async def on_interaction(self, interaction: discord.Interaction) -> None:
             if interaction.type != discord.InteractionType.component:
