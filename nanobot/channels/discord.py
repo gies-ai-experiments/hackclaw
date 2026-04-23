@@ -290,12 +290,22 @@ if DISCORD_AVAILABLE:
                 @app_commands.describe(
                     track="Which mentor track best fits your question?",
                     problem="What do you need help with?",
+                    mode="In-person (mentor comes to you) or online (also gets a voice channel)",
+                    location="If in-person: where you're sitting (e.g., BIF 2007). Ignored for online.",
                 )
-                @app_commands.choices(track=_track_choices)
+                @app_commands.choices(
+                    track=_track_choices,
+                    mode=[
+                        app_commands.Choice(name="In-person (mentor comes to your table)", value="in_person"),
+                        app_commands.Choice(name="Online (voice channel + team text channel)", value="online"),
+                    ],
+                )
                 async def mentorme_command(
                     interaction: discord.Interaction,
                     track: app_commands.Choice[str],
                     problem: str,
+                    mode: app_commands.Choice[str],
+                    location: str = "",
                 ) -> None:
                     from nanobot.helpqueue.handler import mentorme_instant
                     mcfg = self._channel.config.mentor_queue
@@ -307,12 +317,17 @@ if DISCORD_AVAILABLE:
                             ephemeral=True,
                         )
                         return
+                    # Online mentor requests reuse the same voice-room pool as /helpme —
+                    # office hours are a shared physical/virtual resource, not per-track.
                     await mentorme_instant(
                         interaction,
                         track=track.value,
                         problem=problem,
+                        mode=mode.value,
+                        location=location,
                         mentor_queue_channel_id=mcfg.channel_id,
                         track_role_id=role_id,
+                        office_hours_voice_ids=self._channel.config.help_queue.office_hours_voice_ids,
                     )
 
             @self.tree.command(

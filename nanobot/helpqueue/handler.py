@@ -40,56 +40,29 @@ async def mentorme_instant(
     *,
     track: str,
     problem: str,
+    mode: str,
+    location: str,
     mentor_queue_channel_id: str,
     track_role_id: str,
+    office_hours_voice_ids: list[str] | None = None,
 ) -> None:
-    """Post a mentor request to ``#mentor-queue`` pinging one track role.
+    """/mentorme — same flow as /helpme, but in the track-specific queue.
 
-    Unlike ``/helpme`` this skips solution-suggestions and online voice
-    rooms — domain mentors answer in thread / DM / on foot. We only need
-    the ticket + embed + ping.
+    Reuses :func:`helpme_instant` wholesale so in-person + online + voice
+    office-hours all behave identically; the only differences are that
+    the ticket lands in ``#mentor-queue`` instead of ``#help-queue`` and
+    pings the matching ``<track>-mentor`` role.
     """
-    channel = interaction.channel
-    if channel is None:
-        await interaction.response.send_message(
-            "This command must be used in a text channel.", ephemeral=True
-        )
-        return
-
-    store = get_store()
-    team_name = (
-        channel.name.replace("-", " ").title() if hasattr(channel, "name") else "Unknown"
+    await helpme_instant(
+        interaction,
+        location=location,
+        problem=problem,
+        mode=mode,
+        help_queue_channel_id=mentor_queue_channel_id,
+        mentor_role_id=track_role_id,
+        office_hours_voice_ids=office_hours_voice_ids,
+        track=track,
     )
-    ticket = store.create(
-        team_name=team_name,
-        channel_id=channel.id,
-        location="",
-        description=problem.strip(),
-        mode="in_person",
-        participant_id=str(interaction.user.id),
-    )
-    ticket.track = track
-    ticket.queue_channel_id = int(mentor_queue_channel_id)
-
-    await interaction.response.send_message(
-        f"Mentor request **{ticket.id}** created — a **{track}** mentor will be with "
-        f"you shortly.\n**Problem:** {ticket.description}",
-        ephemeral=False,
-    )
-
-    try:
-        client = interaction.client
-        queue_channel = client.get_channel(int(mentor_queue_channel_id))
-        if queue_channel is None:
-            queue_channel = await client.fetch_channel(int(mentor_queue_channel_id))
-
-        embed = build_ticket_embed(ticket)
-        view = ClaimView(ticket.id)
-        ping = f"<@&{track_role_id}> new **{track}** mentor request!"
-        queue_msg = await queue_channel.send(content=ping, embed=embed, view=view)
-        ticket.queue_message_id = queue_msg.id
-    except Exception as e:
-        logger.warning("Failed to post mentor ticket to queue channel: {}", e)
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +79,7 @@ async def helpme_instant(
     help_queue_channel_id: str,
     mentor_role_id: str,
     office_hours_voice_ids: list[str] | None = None,
+    track: str | None = None,
 ) -> None:
     """Single-shot /helpme.
 
@@ -203,6 +177,12 @@ async def helpme_instant(
         mode="online" if mode == "online" else "in_person",
         participant_id=participant_id,
     )
+    # Stamp the ticket with its queue context so button handlers (claim,
+    # resolve) route back to the correct channel regardless of which
+    # slash command opened the ticket (/helpme vs /mentorme).
+    ticket.queue_channel_id = int(help_queue_channel_id)
+    if track:
+        ticket.track = track
     queue_position = -1
     if ticket.mode == "online":
         queue_position = store.enqueue_online(ticket.id)
@@ -242,7 +222,8 @@ async def helpme_instant(
         view = ClaimView(ticket.id)
         if mentor_role_id:
             mode_label = "online" if ticket.mode == "online" else "in-person"
-            ping = f"<@&{mentor_role_id}> new {mode_label} help request!"
+            kind = f"{track} mentor" if track else "help"
+            ping = f"<@&{mentor_role_id}> new {mode_label} {kind} request!"
         else:
             ping = "New help request!"
         queue_msg = await queue_channel.send(content=ping, embed=embed, view=view)
