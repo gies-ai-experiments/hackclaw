@@ -452,6 +452,21 @@ async def handle_claim(interaction: discord.Interaction, ticket_id: str) -> None
 
     # --- Online-specific post-claim: grant team members access + DM ---
     store.pop_online(ticket_id)
+
+    # Mentor also joins the team's text channel (same as in-person) so
+    # they can chat with the team in text while the voice call runs.
+    await _add_mentor_to_channel(interaction.client, ticket.channel_id, interaction.user)
+    try:
+        team_channel = interaction.client.get_channel(ticket.channel_id)
+        if team_channel is None:
+            team_channel = await interaction.client.fetch_channel(ticket.channel_id)
+        await team_channel.send(
+            f"Mentor **{mentor_name}** has joined for {ticket.id} — meet in the voice room "
+            f"that just appeared in your sidebar. I'll stick around here for follow-ups too."
+        )
+    except Exception as e:
+        logger.warning("Failed to notify team channel for online ticket {}: {}", ticket_id, e)
+
     if reserved_room:
         team_ids = await _team_member_ids(interaction.client, ticket.channel_id)
         # Always include the requester even if we somehow failed to enumerate
@@ -532,8 +547,19 @@ async def handle_unclaim(interaction: discord.Interaction, ticket_id: str) -> No
             logger.warning("Failed to notify team channel for ticket {}: {}", ticket_id, e)
         return
 
-    # Online: release the voice room + revoke everyone the team had access for
+    # Online: release the voice room + revoke everyone the team had access for,
+    # and also strip the mentor's text-channel override (granted on claim).
     store.release_room(ticket.id)
+    await _remove_mentor_from_channel(interaction.client, ticket.channel_id, mentor_id)
+    try:
+        team_channel = interaction.client.get_channel(ticket.channel_id)
+        if team_channel is None:
+            team_channel = await interaction.client.fetch_channel(ticket.channel_id)
+        await team_channel.send(
+            f"Mentor left {ticket.id} — back in the queue, another mentor should pick it up."
+        )
+    except Exception as e:
+        logger.warning("Failed to notify team channel on online unclaim {}: {}", ticket_id, e)
     if prior_room:
         granted = list(ticket_before.granted_user_ids) if ticket_before else []
         ticket.granted_user_ids = []
@@ -636,8 +662,27 @@ async def handle_resolve_with_solution(
         except Exception as e:
             logger.warning("Failed to notify team channel for ticket {}: {}", ticket_id, e)
     else:
-        # Online: release the voice room + revoke every team-member override
+        # Online: release the voice room, revoke every team-member override,
+        # and also pull the mentor's text-channel permission (granted on claim).
         store.release_room(ticket.id)
+        if mentor_id:
+            await _remove_mentor_from_channel(interaction.client, ticket.channel_id, mentor_id)
+        time_msg = ""
+        if resolved_ticket.created_at and resolved_ticket.resolved_at:
+            minutes = int(
+                (resolved_ticket.resolved_at - resolved_ticket.created_at).total_seconds() / 60
+            )
+            time_msg = f" (resolved in {minutes} min)"
+        try:
+            team_channel = interaction.client.get_channel(ticket.channel_id)
+            if team_channel is None:
+                team_channel = await interaction.client.fetch_channel(ticket.channel_id)
+            await team_channel.send(
+                f"Ticket **{ticket.id}** resolved!{time_msg} Mentor has left — voice room has been "
+                "removed from everyone's sidebar."
+            )
+        except Exception as e:
+            logger.warning("Failed to notify team channel on online resolve {}: {}", ticket_id, e)
         if prior_room:
             granted = list(resolved_ticket.granted_user_ids)
             resolved_ticket.granted_user_ids = []
