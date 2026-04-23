@@ -106,7 +106,16 @@ class InviteTracker:
         self._uses[guild.id] = {inv.code: (inv.uses or 0) for inv in invites}
 
     async def used_code_for_member(self, member: "discord.Member") -> str | None:
-        """Return the invite code *member* just joined through, if identifiable."""
+        """Return the invite code *member* just joined through, if identifiable.
+
+        Handles two cases:
+        1. Normal invite: its ``uses`` counter went up by one.
+        2. Single-use invite: Discord deletes it on use, so it won't
+           appear in the post-join listing — we detect it by finding a
+           code that WAS in the cached snapshot but is missing now, and
+           exists in the role mapping (so we don't mis-attribute a
+           manual deletion).
+        """
         guild = member.guild
         try:
             current = await guild.invites()
@@ -114,14 +123,34 @@ class InviteTracker:
             logger.warning("InviteTracker: can't list invites after join: {}", exc)
             return None
         before = self._uses.get(guild.id, {})
+        current_codes = {inv.code for inv in current}
         used: str | None = None
+
+        # Case 1: uses counter incremented
         for inv in current:
-            code = inv.code
             cur = inv.uses or 0
-            prev = before.get(code, 0)
+            prev = before.get(inv.code, 0)
             if cur > prev:
-                used = code
+                used = inv.code
                 break
+
+        # Case 2: invite disappeared (single-use consumed). Prefer codes
+        # we have a role mapping for — avoids mis-attributing a code
+        # that was manually deleted moments before the join.
+        if used is None:
+            disappeared = [c for c in before if c not in current_codes]
+            mapped = [c for c in disappeared if c in self._mapping]
+            if len(mapped) == 1:
+                used = mapped[0]
+            elif len(mapped) == 0 and len(disappeared) == 1:
+                used = disappeared[0]
+            elif len(mapped) > 1:
+                logger.warning(
+                    "InviteTracker: {} mapped invites disappeared at once; "
+                    "can't uniquely attribute join for member {}",
+                    len(mapped), member.id,
+                )
+
         # Update the snapshot either way so we don't double-assign
         self._uses[guild.id] = {inv.code: (inv.uses or 0) for inv in current}
         return used
