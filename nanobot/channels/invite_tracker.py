@@ -115,7 +115,12 @@ class InviteTracker:
            code that WAS in the cached snapshot but is missing now, and
            exists in the role mapping (so we don't mis-attribute a
            manual deletion).
+
+        Always refreshes the on-disk mapping first so invites added by
+        out-of-process rollout scripts (which write the JSON directly
+        without a bot restart) are picked up immediately.
         """
+        self.reload_mapping()
         guild = member.guild
         try:
             current = await guild.invites()
