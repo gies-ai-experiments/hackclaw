@@ -32,6 +32,7 @@ class HelpTicket:
     queue_message_id: int | None = None
     queue_channel_id: int | None = None  # Which queue channel the claim/resolve UI lives in.
     track: str | None = None             # For /mentorme tickets: the mentor track (e.g. "finance").
+    required_room_id: str | None = None  # For per-track online tickets: only this room may be reserved.
     solution: str | None = None
     granted_user_ids: list[str] = field(default_factory=list)
     """Discord user ids who received a view+connect override on ``online_room_id``
@@ -67,19 +68,19 @@ class TicketStore:
     # ------------------------------------------------------------------
 
     def configure_rooms(self, room_ids: list[str]) -> None:
-        """Register voice-channel ids as the pool of online office-hours rooms.
+        """Register voice-channel ids as available online office-hours rooms.
 
-        Called once at bot startup. Rooms are initialized as free. Calling
-        again replaces the pool (unused rooms drop; new ones become free).
-        Rooms currently assigned to an active ticket keep their assignment
-        if still present in *room_ids*.
+        Additive: rooms already present keep their current assignment,
+        new ones start free. Callers do **not** lose previously-registered
+        rooms by calling this again with a smaller list — use
+        :meth:`remove_room` for explicit removal. This matters when
+        multiple slash commands (``/helpme`` pool + ``/mentorme`` track
+        rooms) register their rooms independently.
         """
         with self._lock:
-            new_rooms: dict[str, str | None] = {}
             for rid in room_ids:
                 rid = str(rid)
-                new_rooms[rid] = self._rooms.get(rid)
-            self._rooms = new_rooms
+                self._rooms.setdefault(rid, None)
 
     def configured_rooms(self) -> list[str]:
         """Return configured voice-channel ids (in configuration order)."""
@@ -219,17 +220,30 @@ class TicketStore:
         ticket_id: str,
         *,
         prefer_room: str | None = None,
+        require_room: str | None = None,
     ) -> str | None:
-        """Reserve a free voice-channel room for a ticket.
+        """Reserve a voice-channel room for a ticket.
 
-        Returns the reserved room id, or ``None`` if no rooms are free.
-        *prefer_room* (e.g. the mentor's current voice channel) is picked
-        if it's configured and free; otherwise the first free room wins.
-        The reservation is recorded both in the pool AND on the ticket
-        (``online_room_id``).
+        Returns the reserved room id, or ``None`` if no room can be
+        assigned. Selection rules, in order:
+
+        - *require_room* (if set): only that room is acceptable. Reserves
+          it if free, otherwise returns ``None`` (the caller should tell
+          the mentor to wait). Used for per-track mentor tickets where
+          the room is dictated by the track, not negotiable.
+        - *prefer_room*: picked if it's configured and free; otherwise
+          the first free room wins.
+        - Neither set: first free room wins.
         """
         with self._lock:
             if ticket_id not in self._tickets:
+                return None
+            if require_room is not None:
+                required = str(require_room)
+                if self._rooms.get(required) is None and required in self._rooms:
+                    self._rooms[required] = ticket_id
+                    self._tickets[ticket_id].online_room_id = required
+                    return required
                 return None
             free = [rid for rid, tid in self._rooms.items() if tid is None]
             if not free:

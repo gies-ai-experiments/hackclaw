@@ -45,6 +45,13 @@ class MentorQueueConfig(Base):
     these keys to participants; the handler pings the matching role when a
     ticket is posted. E.g. ``{"finance": "1496964848959885465", ...}``."""
 
+    track_voice_ids: dict[str, str] = Field(default_factory=dict)
+    """Map of track slug → per-track voice channel id. When an online
+    ``/mentorme`` ticket is claimed, the participant's team gets voice
+    access to the matching channel — not the shared ``/helpme`` pool.
+    Missing entries fall back to the shared pool. Keys should match
+    :attr:`track_roles`."""
+
 
 class HelpQueueConfig(Base):
     """Configuration for the help ticket queue."""
@@ -317,8 +324,11 @@ if DISCORD_AVAILABLE:
                             ephemeral=True,
                         )
                         return
-                    # Online mentor requests reuse the same voice-room pool as /helpme —
-                    # office hours are a shared physical/virtual resource, not per-track.
+                    # If the track has a dedicated voice channel configured,
+                    # pin the online session to that room so each track is
+                    # isolated. Without one, fall back to the shared /helpme
+                    # pool so the feature still works end-to-end.
+                    track_voice_id = mcfg.track_voice_ids.get(track.value) or None
                     await mentorme_instant(
                         interaction,
                         track=track.value,
@@ -327,6 +337,7 @@ if DISCORD_AVAILABLE:
                         location=location,
                         mentor_queue_channel_id=mcfg.channel_id,
                         track_role_id=role_id,
+                        track_voice_id=track_voice_id,
                         office_hours_voice_ids=self._channel.config.help_queue.office_hours_voice_ids,
                     )
 

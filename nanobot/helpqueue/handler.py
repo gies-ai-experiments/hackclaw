@@ -44,15 +44,24 @@ async def mentorme_instant(
     location: str,
     mentor_queue_channel_id: str,
     track_role_id: str,
+    track_voice_id: str | None = None,
     office_hours_voice_ids: list[str] | None = None,
 ) -> None:
     """/mentorme — same flow as /helpme, but in the track-specific queue.
 
-    Reuses :func:`helpme_instant` wholesale so in-person + online + voice
-    office-hours all behave identically; the only differences are that
-    the ticket lands in ``#mentor-queue`` instead of ``#help-queue`` and
-    pings the matching ``<track>-mentor`` role.
+    Differences from ``/helpme``:
+    - Ticket lands in ``#mentor-queue`` instead of ``#help-queue``.
+    - Pings the matching ``<track>-mentor`` role.
+    - If *track_voice_id* is set, the online ticket is pinned to that
+      specific per-track voice channel; the claim preflight will refuse
+      to reserve any other room.
     """
+    # Register the track's voice channel so the store knows about it
+    # before we try to reserve it on claim. configure_rooms is additive
+    # so this doesn't disturb the shared /helpme pool.
+    if mode == "online" and track_voice_id:
+        get_store().configure_rooms([track_voice_id])
+
     await helpme_instant(
         interaction,
         location=location,
@@ -62,6 +71,7 @@ async def mentorme_instant(
         mentor_role_id=track_role_id,
         office_hours_voice_ids=office_hours_voice_ids,
         track=track,
+        required_room_id=track_voice_id if mode == "online" else None,
     )
 
 
@@ -80,6 +90,7 @@ async def helpme_instant(
     mentor_role_id: str,
     office_hours_voice_ids: list[str] | None = None,
     track: str | None = None,
+    required_room_id: str | None = None,
 ) -> None:
     """Single-shot /helpme.
 
@@ -183,6 +194,8 @@ async def helpme_instant(
     ticket.queue_channel_id = int(help_queue_channel_id)
     if track:
         ticket.track = track
+    if required_room_id:
+        ticket.required_room_id = str(required_room_id)
     queue_position = -1
     if ticket.mode == "online":
         queue_position = store.enqueue_online(ticket.id)
@@ -400,23 +413,40 @@ async def handle_claim(interaction: discord.Interaction, ticket_id: str) -> None
                 ephemeral=True,
             )
             return
-        if not store.any_room_free():
-            await interaction.response.send_message(
-                "Both office-hours rooms are in use right now. Wait until one "
-                "of the current sessions resolves, then claim again.",
-                ephemeral=True,
+
+        # Per-track mentor tickets pin the room up-front — finance goes to
+        # finance-office-hours, etc. If that room is busy the mentor must
+        # wait for the current session to resolve; we do NOT fall back to
+        # a shared pool because the track roles are also scoped per-channel.
+        if ticket.required_room_id:
+            reserved_room = store.reserve_room(
+                ticket_id, require_room=ticket.required_room_id
             )
-            return
-        # Prefer the mentor's current voice channel if it's in the pool — lets them
-        # stay put between sessions.
-        prefer = None
-        if (
-            isinstance(interaction.user, discord.Member)
-            and interaction.user.voice
-            and interaction.user.voice.channel
-        ):
-            prefer = str(interaction.user.voice.channel.id)
-        reserved_room = store.reserve_room(ticket_id, prefer_room=prefer)
+            if reserved_room is None:
+                await interaction.response.send_message(
+                    f"The **{ticket.track or 'track'}** voice room is currently in use. "
+                    "Wait for that session to resolve, then claim again.",
+                    ephemeral=True,
+                )
+                return
+        else:
+            if not store.any_room_free():
+                await interaction.response.send_message(
+                    "All office-hours rooms are in use right now. Wait until one "
+                    "of the current sessions resolves, then claim again.",
+                    ephemeral=True,
+                )
+                return
+            # Prefer the mentor's current voice channel if it's in the pool — lets them
+            # stay put between sessions.
+            prefer = None
+            if (
+                isinstance(interaction.user, discord.Member)
+                and interaction.user.voice
+                and interaction.user.voice.channel
+            ):
+                prefer = str(interaction.user.voice.channel.id)
+            reserved_room = store.reserve_room(ticket_id, prefer_room=prefer)
 
     success = store.claim(ticket_id, mentor_id=mentor_id, mentor_name=mentor_name)
     if not success:
