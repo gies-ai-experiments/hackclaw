@@ -31,6 +31,68 @@ def get_store() -> TicketStore:
 
 
 # ---------------------------------------------------------------------------
+# /mentorme (track-specific mentor request)
+# ---------------------------------------------------------------------------
+
+
+async def mentorme_instant(
+    interaction: discord.Interaction,
+    *,
+    track: str,
+    problem: str,
+    mentor_queue_channel_id: str,
+    track_role_id: str,
+) -> None:
+    """Post a mentor request to ``#mentor-queue`` pinging one track role.
+
+    Unlike ``/helpme`` this skips solution-suggestions and online voice
+    rooms — domain mentors answer in thread / DM / on foot. We only need
+    the ticket + embed + ping.
+    """
+    channel = interaction.channel
+    if channel is None:
+        await interaction.response.send_message(
+            "This command must be used in a text channel.", ephemeral=True
+        )
+        return
+
+    store = get_store()
+    team_name = (
+        channel.name.replace("-", " ").title() if hasattr(channel, "name") else "Unknown"
+    )
+    ticket = store.create(
+        team_name=team_name,
+        channel_id=channel.id,
+        location="",
+        description=problem.strip(),
+        mode="in_person",
+        participant_id=str(interaction.user.id),
+    )
+    ticket.track = track
+    ticket.queue_channel_id = int(mentor_queue_channel_id)
+
+    await interaction.response.send_message(
+        f"Mentor request **{ticket.id}** created — a **{track}** mentor will be with "
+        f"you shortly.\n**Problem:** {ticket.description}",
+        ephemeral=False,
+    )
+
+    try:
+        client = interaction.client
+        queue_channel = client.get_channel(int(mentor_queue_channel_id))
+        if queue_channel is None:
+            queue_channel = await client.fetch_channel(int(mentor_queue_channel_id))
+
+        embed = build_ticket_embed(ticket)
+        view = ClaimView(ticket.id)
+        ping = f"<@&{track_role_id}> new **{track}** mentor request!"
+        queue_msg = await queue_channel.send(content=ping, embed=embed, view=view)
+        ticket.queue_message_id = queue_msg.id
+    except Exception as e:
+        logger.warning("Failed to post mentor ticket to queue channel: {}", e)
+
+
+# ---------------------------------------------------------------------------
 # /helpme (instant — slash command with parameters)
 # ---------------------------------------------------------------------------
 

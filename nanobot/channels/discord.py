@@ -34,6 +34,18 @@ MAX_MESSAGE_LEN = 2000  # Discord message character limit
 TYPING_INTERVAL_S = 8
 
 
+class MentorQueueConfig(Base):
+    """Configuration for the track-specific mentor queue (/mentorme)."""
+
+    channel_id: str = ""
+    """``#mentor-queue`` channel id. Empty disables the ``/mentorme`` command."""
+
+    track_roles: dict[str, str] = Field(default_factory=dict)
+    """Map of track slug → mentor role id. The slash-command picker exposes
+    these keys to participants; the handler pings the matching role when a
+    ticket is posted. E.g. ``{"finance": "1496964848959885465", ...}``."""
+
+
 class HelpQueueConfig(Base):
     """Configuration for the help ticket queue."""
 
@@ -68,6 +80,7 @@ class DiscordConfig(Base):
     working_emoji: str = "🔧"
     working_emoji_delay: float = 2.0
     help_queue: HelpQueueConfig = Field(default_factory=HelpQueueConfig)
+    mentor_queue: MentorQueueConfig = Field(default_factory=MentorQueueConfig)
 
 
 if DISCORD_AVAILABLE:
@@ -171,14 +184,20 @@ if DISCORD_AVAILABLE:
             if not ticket_id:
                 await interaction.response.send_message("Could not identify the ticket.", ephemeral=True)
                 return
-            from nanobot.helpqueue.handler import handle_claim, handle_resolve_button, handle_unclaim
+            from nanobot.helpqueue.handler import handle_claim, handle_resolve_button, handle_unclaim, get_store
             if custom_id == "helpqueue:claim":
                 await handle_claim(interaction, ticket_id)
             elif custom_id == "helpqueue:unclaim":
                 await handle_unclaim(interaction, ticket_id)
             elif custom_id == "helpqueue:resolve":
-                cfg = self._channel.config.help_queue
-                await handle_resolve_button(interaction, ticket_id, cfg.channel_id)
+                # /mentorme tickets live in #mentor-queue; /helpme tickets in #help-queue.
+                # The ticket itself carries its queue channel id when set.
+                cfg_help = self._channel.config.help_queue
+                t = get_store().get(ticket_id)
+                channel_id = (
+                    str(t.queue_channel_id) if (t and t.queue_channel_id) else cfg_help.channel_id
+                )
+                await handle_resolve_button(interaction, ticket_id, channel_id)
 
         async def _reply_ephemeral(self, interaction: discord.Interaction, text: str) -> bool:
             """Send an ephemeral interaction response and report success."""
@@ -254,6 +273,47 @@ if DISCORD_AVAILABLE:
                 from nanobot.helpqueue.handler import handle_resolve_command
                 cfg = self._channel.config.help_queue
                 await handle_resolve_command(interaction, help_queue_channel_id=cfg.channel_id)
+
+            # /mentorme — track-specific mentor request (finance, HR, etc.).
+            # Registered only when mentor_queue.channel_id is configured.
+            _mentor_cfg = self._channel.config.mentor_queue
+            if _mentor_cfg.channel_id and _mentor_cfg.track_roles:
+                _track_choices = [
+                    app_commands.Choice(name=slug, value=slug)
+                    for slug in _mentor_cfg.track_roles.keys()
+                ]
+
+                @self.tree.command(
+                    name="mentorme",
+                    description="Request a track-specific mentor (finance, HR, business-tech, etc.)",
+                )
+                @app_commands.describe(
+                    track="Which mentor track best fits your question?",
+                    problem="What do you need help with?",
+                )
+                @app_commands.choices(track=_track_choices)
+                async def mentorme_command(
+                    interaction: discord.Interaction,
+                    track: app_commands.Choice[str],
+                    problem: str,
+                ) -> None:
+                    from nanobot.helpqueue.handler import mentorme_instant
+                    mcfg = self._channel.config.mentor_queue
+                    role_id = mcfg.track_roles.get(track.value, "")
+                    if not role_id:
+                        await interaction.response.send_message(
+                            f"No mentor role is mapped for track `{track.value}` — "
+                            "ask an organizer.",
+                            ephemeral=True,
+                        )
+                        return
+                    await mentorme_instant(
+                        interaction,
+                        track=track.value,
+                        problem=problem,
+                        mentor_queue_channel_id=mcfg.channel_id,
+                        track_role_id=role_id,
+                    )
 
             @self.tree.command(
                 name="introduce",

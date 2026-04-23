@@ -30,6 +30,8 @@ class HelpTicket:
     claimed_at: datetime | None = None
     resolved_at: datetime | None = None
     queue_message_id: int | None = None
+    queue_channel_id: int | None = None  # Which queue channel the claim/resolve UI lives in.
+    track: str | None = None             # For /mentorme tickets: the mentor track (e.g. "finance").
     solution: str | None = None
     granted_user_ids: list[str] = field(default_factory=list)
     """Discord user ids who received a view+connect override on ``online_room_id``
