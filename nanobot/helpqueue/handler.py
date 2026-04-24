@@ -111,6 +111,17 @@ async def helpme_instant(
 
     channel_id = channel.id
 
+    # #ask-hackclaw is for free-form questions only. Routing helpme/mentorme
+    # through there would leak ticket chatter into a public channel (see
+    # the recent "silence mentor announcements in non-team channels" fix).
+    if str(channel_id) == ASK_HACKCLAW_CHANNEL_ID:
+        await interaction.response.send_message(
+            "Please run `/helpme` or `/mentorme` from your **team's text channel** — "
+            "this channel is for free-form questions to hackclaw only.",
+            ephemeral=True,
+        )
+        return
+
     # For in-person, only one open ticket per team channel. Online does not
     # use the team channel for delivery, so the per-channel lock doesn't apply.
     if mode == "in_person":
@@ -296,6 +307,7 @@ async def _remove_mentor_from_channel(client: discord.Client, channel_id: int, u
 # must be fired from a channel in this category so the bot can use its
 # member list as the team roster.
 TEAMS_CATEGORY_ID = "1493806352139817172"
+ASK_HACKCLAW_CHANNEL_ID = "1491359618411270197"
 
 
 async def _is_team_channel(client: "discord.Client", channel_id: int) -> bool:
