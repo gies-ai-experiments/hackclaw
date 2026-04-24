@@ -233,6 +233,7 @@ async def helpme_instant(
         )
 
     # Post embed + ClaimView to #help-queue
+    queue_msg_jump_url: str | None = None
     try:
         client = interaction.client
         queue_channel = client.get_channel(int(help_queue_channel_id))
@@ -252,8 +253,22 @@ async def helpme_instant(
             ping = "New help request!"
         queue_msg = await queue_channel.send(content=ping, embed=embed, view=view)
         ticket.queue_message_id = queue_msg.id
+        queue_msg_jump_url = queue_msg.jump_url
     except Exception as e:
         logger.warning("Failed to post help ticket to queue channel: {}", e)
+
+    # Also DM every mentor with the matching role — backstop for mentors
+    # whose notification settings suppress role pings in the queue channel.
+    if mentor_role_id:
+        asyncio.create_task(
+            _dm_mentors_new_ticket(
+                interaction.client,
+                mentor_role_id=mentor_role_id,
+                ticket=ticket,
+                track=track,
+                jump_url=queue_msg_jump_url,
+            )
+        )
 
     # Schedule reminder
     task = asyncio.create_task(
@@ -265,6 +280,58 @@ async def helpme_instant(
 # ---------------------------------------------------------------------------
 # Channel join / leave helpers
 # ---------------------------------------------------------------------------
+
+
+async def _dm_mentors_new_ticket(
+    client: "discord.Client",
+    *,
+    mentor_role_id: str,
+    ticket: HelpTicket,
+    track: str | None,
+    jump_url: str | None,
+) -> None:
+    """DM every member of *mentor_role_id* about a newly-posted ticket.
+
+    Runs fire-and-forget so it doesn't block the slash-command response.
+    Individual send failures (DM disabled, blocked, etc.) are swallowed —
+    the queue channel is still the primary source of truth.
+    """
+    try:
+        guild = None
+        for g in client.guilds:
+            role = g.get_role(int(mentor_role_id))
+            if role is not None:
+                guild = g
+                break
+        if guild is None:
+            return
+        role = guild.get_role(int(mentor_role_id))
+        if role is None or not role.members:
+            return
+
+        mode_label = "online (voice)" if ticket.mode == "online" else "in-person"
+        kind = f"{track} mentor" if track else "help"
+        lines = [
+            f"**New {mode_label} {kind} request — {ticket.id}**",
+            f"**Team:** {ticket.team_name}",
+        ]
+        if ticket.location:
+            lines.append(f"**Location:** {ticket.location}")
+        lines.append(f"**Problem:** {ticket.description}")
+        if jump_url:
+            lines.append(f"[Claim in the queue →]({jump_url})")
+        body = "\n".join(lines)
+
+        for member in role.members:
+            if member.bot:
+                continue
+            try:
+                await member.send(body)
+            except Exception as e:
+                logger.debug("Couldn't DM mentor {} about ticket {}: {}", member.id, ticket.id, e)
+            await asyncio.sleep(0.25)
+    except Exception as e:
+        logger.warning("mentor-DM fanout failed for ticket {}: {}", ticket.id, e)
 
 
 async def _add_mentor_to_channel(client: discord.Client, channel_id: int, user: discord.User | discord.Member) -> None:
