@@ -26,7 +26,7 @@ A: An AI agent that automates a multi-step business process. See the tracks: Fin
 A: Simple chatbots, single-prompt solutions, or anything that isn't real process automation.
 
 **Q: When are submissions due?**
-A: 1:00 PM, Friday April 24.
+A: **12:00 PM**, Friday April 24 — hard cutoff. Judging starts at 1:00 PM. Between 12:00 and 1:00 PM hackclaw emails every team their designated judging room, so watch your inbox during lunch.
 
 **Q: What do I need for my submission?**
 A: A short slide deck (intro + workflow) and a working live demo.

@@ -21,8 +21,9 @@
 | Time | Activity | Location |
 |------|----------|----------|
 | 8:00 AM – 12:00 PM | **Hacking Session 2** — breakfast at 8 AM, mentors present, project champion office hours 9–11 AM | BIF 1049, 3001, 3003 |
-| 12:00 – 1:00 PM | **Box Lunch + Submission Preparation** | BIF Atrium (1038) |
-| 1:00 – 3:00 PM | **Project Submissions & Judging — Round 1** (Preliminary) | Conference rooms in BIF & Wohlers |
+| **12:00 PM** | **Submissions due** — hard cutoff for all teams | — |
+| 12:00 – 1:00 PM | **Box Lunch** — hackclaw emails each team their designated judging room during this window | BIF Atrium (1038) |
+| 1:00 – 3:00 PM | **Judging — Round 1** (Preliminary) — teams present in the room listed in their email from hackclaw | Conference rooms in BIF & Wohlers |
 | | 1:15–2:00 PM — Team presentations (7 min each per track, in parallel) | |
 | | 2:05–2:30 PM — Judges select top 1 team per track (5 finalists) | |
 | | 2:40 PM — Finalist announcement | |
@@ -33,6 +34,7 @@
 
 - **Team registration closes:** 5:45 PM, April 23
 - **Hacking starts:** 7:00 PM, April 23 (after dinner)
-- **Submissions due:** 1:00 PM, April 24
+- **Submissions due:** **12:00 PM, April 24** (judging starts 1:00 PM)
+- **Judging room assignments:** emailed to each team by hackclaw between 12:00 PM and 1:00 PM
 - **Finalists announced:** ~2:40 PM, April 24
 - **Winners announced:** ~4:00 PM, April 24
