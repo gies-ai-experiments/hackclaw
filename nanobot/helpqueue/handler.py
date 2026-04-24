@@ -122,6 +122,20 @@ async def helpme_instant(
         )
         return
 
+    # Tickets can only be opened from a team channel (under the Teams
+    # category). Posting from any other channel — including accidental
+    # use in a public or organizer channel — would leak ticket content
+    # and misroute mentor responses.
+    parent_id = getattr(channel, "category_id", None)
+    if parent_id is None or str(parent_id) != TEAMS_CATEGORY_ID:
+        await interaction.response.send_message(
+            "Please run `/helpme` or `/mentorme` from your **team's text channel** "
+            "(under the Teams category). Tickets can only be opened from team "
+            "channels so the mentor knows which team to help.",
+            ephemeral=True,
+        )
+        return
+
     # For in-person, only one open ticket per team channel. Online does not
     # use the team channel for delivery, so the per-channel lock doesn't apply.
     if mode == "in_person":
@@ -140,21 +154,6 @@ async def helpme_instant(
             ephemeral=True,
         )
         return
-
-    # Online must be fired from a team channel — the bot uses that channel's
-    # member list to figure out who on the team should get voice access.
-    if mode == "online":
-        parent_id = getattr(channel, "category_id", None)
-        if parent_id is None or str(parent_id) != TEAMS_CATEGORY_ID:
-            await interaction.response.send_message(
-                "Run `/helpme mode:online` from your **team's text channel** "
-                "(under the Teams category). That tells me who's on your team "
-                "so I can give everyone voice access — running it from a "
-                "different channel would either expose the voice to the "
-                "whole guild or leave your teammates locked out.",
-                ephemeral=True,
-            )
-            return
 
     # Auto-detect team name from channel name
     team_name = channel.name.replace("-", " ").title() if hasattr(channel, "name") else "Unknown Team"
