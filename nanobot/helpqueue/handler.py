@@ -632,9 +632,11 @@ async def handle_resolve_button(
         )
         return
 
-    from nanobot.helpqueue.views import ResolveModal
-    modal = ResolveModal(ticket_id, help_queue_channel_id)
-    await interaction.response.send_modal(modal)
+    # Mentors asked us to skip the solution-capture modal — just resolve
+    # straight away when Resolve is clicked. Solution text defaults to empty.
+    await handle_resolve_with_solution(
+        interaction, ticket_id, "", help_queue_channel_id,
+    )
 
 
 async def handle_resolve_with_solution(
