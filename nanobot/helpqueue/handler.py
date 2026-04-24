@@ -298,6 +298,24 @@ async def _remove_mentor_from_channel(client: discord.Client, channel_id: int, u
 TEAMS_CATEGORY_ID = "1493806352139817172"
 
 
+async def _is_team_channel(client: "discord.Client", channel_id: int) -> bool:
+    """True only when ``channel_id`` lives under the Teams category.
+
+    Used to gate mentor-join / resolve announcements: if a participant
+    ran ``/helpme`` or ``/mentorme`` from a public channel like
+    ``#ask-hackclaw``, we must NOT post mentor-joined/left updates
+    there — that channel is public and would leak private ticket chatter.
+    """
+    try:
+        channel = client.get_channel(channel_id)
+        if channel is None:
+            channel = await client.fetch_channel(channel_id)
+        parent = getattr(channel, "category_id", None)
+        return parent is not None and str(parent) == TEAMS_CATEGORY_ID
+    except Exception:
+        return False
+
+
 async def _team_member_ids(client: discord.Client, text_channel_id: int) -> list[str]:
     """Return Discord user ids of everyone who can see *text_channel_id*.
 
@@ -466,18 +484,24 @@ async def handle_claim(interaction: discord.Interaction, ticket_id: str) -> None
     view.resolve_button.disabled = False
     await interaction.response.edit_message(embed=embed, view=view)
 
+    ticket_is_team = await _is_team_channel(interaction.client, ticket.channel_id)
+
     if ticket.mode == "in_person":
-        # Existing in-person flow: mentor joins the team channel
-        await _add_mentor_to_channel(interaction.client, ticket.channel_id, interaction.user)
-        try:
-            team_channel = interaction.client.get_channel(ticket.channel_id)
-            if team_channel is None:
-                team_channel = await interaction.client.fetch_channel(ticket.channel_id)
-            await team_channel.send(
-                f"Mentor **{mentor_name}** has joined the channel to help with {ticket.id}!"
-            )
-        except Exception as e:
-            logger.warning("Failed to notify team channel for ticket {}: {}", ticket_id, e)
+        # Existing in-person flow: mentor joins the team channel. But only
+        # if the ticket actually originated from a team channel — if a
+        # participant ran /helpme from #ask-hackclaw, we don't want to
+        # pollute the public channel with mentor-joined notifications.
+        if ticket_is_team:
+            await _add_mentor_to_channel(interaction.client, ticket.channel_id, interaction.user)
+            try:
+                team_channel = interaction.client.get_channel(ticket.channel_id)
+                if team_channel is None:
+                    team_channel = await interaction.client.fetch_channel(ticket.channel_id)
+                await team_channel.send(
+                    f"Mentor **{mentor_name}** has joined the channel to help with {ticket.id}!"
+                )
+            except Exception as e:
+                logger.warning("Failed to notify team channel for ticket {}: {}", ticket_id, e)
         return
 
     # --- Online-specific post-claim: grant team members access + DM ---
@@ -485,17 +509,19 @@ async def handle_claim(interaction: discord.Interaction, ticket_id: str) -> None
 
     # Mentor also joins the team's text channel (same as in-person) so
     # they can chat with the team in text while the voice call runs.
-    await _add_mentor_to_channel(interaction.client, ticket.channel_id, interaction.user)
-    try:
-        team_channel = interaction.client.get_channel(ticket.channel_id)
-        if team_channel is None:
-            team_channel = await interaction.client.fetch_channel(ticket.channel_id)
-        await team_channel.send(
-            f"Mentor **{mentor_name}** has joined for {ticket.id} — meet in the voice room "
-            f"that just appeared in your sidebar. I'll stick around here for follow-ups too."
-        )
-    except Exception as e:
-        logger.warning("Failed to notify team channel for online ticket {}: {}", ticket_id, e)
+    # Skip when the ticket came from a non-team channel.
+    if ticket_is_team:
+        await _add_mentor_to_channel(interaction.client, ticket.channel_id, interaction.user)
+        try:
+            team_channel = interaction.client.get_channel(ticket.channel_id)
+            if team_channel is None:
+                team_channel = await interaction.client.fetch_channel(ticket.channel_id)
+            await team_channel.send(
+                f"Mentor **{mentor_name}** has joined for {ticket.id} — meet in the voice room "
+                f"that just appeared in your sidebar. I'll stick around here for follow-ups too."
+            )
+        except Exception as e:
+            logger.warning("Failed to notify team channel for online ticket {}: {}", ticket_id, e)
 
     if reserved_room:
         team_ids = await _team_member_ids(interaction.client, ticket.channel_id)
@@ -564,32 +590,36 @@ async def handle_unclaim(interaction: discord.Interaction, ticket_id: str) -> No
     view.resolve_button.disabled = True
     await interaction.response.edit_message(embed=embed, view=view)
 
+    ticket_is_team = await _is_team_channel(interaction.client, ticket.channel_id)
+
     if prior_mode == "in_person":
+        if ticket_is_team:
+            await _remove_mentor_from_channel(interaction.client, ticket.channel_id, mentor_id)
+            try:
+                team_channel = interaction.client.get_channel(ticket.channel_id)
+                if team_channel is None:
+                    team_channel = await interaction.client.fetch_channel(ticket.channel_id)
+                await team_channel.send(
+                    f"Mentor left the channel. {ticket.id} is back in the queue — waiting for another mentor."
+                )
+            except Exception as e:
+                logger.warning("Failed to notify team channel for ticket {}: {}", ticket_id, e)
+        return
+
+    # Online: release the voice room + revoke everyone the team had access for,
+    # and also strip the mentor's text-channel override (granted on claim).
+    store.release_room(ticket.id)
+    if ticket_is_team:
         await _remove_mentor_from_channel(interaction.client, ticket.channel_id, mentor_id)
         try:
             team_channel = interaction.client.get_channel(ticket.channel_id)
             if team_channel is None:
                 team_channel = await interaction.client.fetch_channel(ticket.channel_id)
             await team_channel.send(
-                f"Mentor left the channel. {ticket.id} is back in the queue — waiting for another mentor."
+                f"Mentor left {ticket.id} — back in the queue, another mentor should pick it up."
             )
         except Exception as e:
-            logger.warning("Failed to notify team channel for ticket {}: {}", ticket_id, e)
-        return
-
-    # Online: release the voice room + revoke everyone the team had access for,
-    # and also strip the mentor's text-channel override (granted on claim).
-    store.release_room(ticket.id)
-    await _remove_mentor_from_channel(interaction.client, ticket.channel_id, mentor_id)
-    try:
-        team_channel = interaction.client.get_channel(ticket.channel_id)
-        if team_channel is None:
-            team_channel = await interaction.client.fetch_channel(ticket.channel_id)
-        await team_channel.send(
-            f"Mentor left {ticket.id} — back in the queue, another mentor should pick it up."
-        )
-    except Exception as e:
-        logger.warning("Failed to notify team channel on online unclaim {}: {}", ticket_id, e)
+            logger.warning("Failed to notify team channel on online unclaim {}: {}", ticket_id, e)
     if prior_room:
         granted = list(ticket_before.granted_user_ids) if ticket_before else []
         ticket.granted_user_ids = []
@@ -677,44 +707,48 @@ async def handle_resolve_with_solution(
     embed = build_ticket_embed(resolved_ticket)
     await interaction.response.edit_message(embed=embed, view=None)
 
+    ticket_is_team = await _is_team_channel(interaction.client, ticket.channel_id)
+
     if prior_mode == "in_person":
-        if mentor_id:
-            await _remove_mentor_from_channel(interaction.client, ticket.channel_id, mentor_id)
-        time_msg = ""
-        if resolved_ticket.created_at and resolved_ticket.resolved_at:
-            minutes = int((resolved_ticket.resolved_at - resolved_ticket.created_at).total_seconds() / 60)
-            time_msg = f" (resolved in {minutes} min)"
-        try:
-            team_channel = interaction.client.get_channel(ticket.channel_id)
-            if team_channel is None:
-                team_channel = await interaction.client.fetch_channel(ticket.channel_id)
-            await team_channel.send(
-                f"Help request **{ticket.id}** has been resolved!{time_msg} Mentor has left the channel."
-            )
-        except Exception as e:
-            logger.warning("Failed to notify team channel for ticket {}: {}", ticket_id, e)
+        if ticket_is_team:
+            if mentor_id:
+                await _remove_mentor_from_channel(interaction.client, ticket.channel_id, mentor_id)
+            time_msg = ""
+            if resolved_ticket.created_at and resolved_ticket.resolved_at:
+                minutes = int((resolved_ticket.resolved_at - resolved_ticket.created_at).total_seconds() / 60)
+                time_msg = f" (resolved in {minutes} min)"
+            try:
+                team_channel = interaction.client.get_channel(ticket.channel_id)
+                if team_channel is None:
+                    team_channel = await interaction.client.fetch_channel(ticket.channel_id)
+                await team_channel.send(
+                    f"Help request **{ticket.id}** has been resolved!{time_msg} Mentor has left the channel."
+                )
+            except Exception as e:
+                logger.warning("Failed to notify team channel for ticket {}: {}", ticket_id, e)
     else:
         # Online: release the voice room, revoke every team-member override,
         # and also pull the mentor's text-channel permission (granted on claim).
         store.release_room(ticket.id)
-        if mentor_id:
-            await _remove_mentor_from_channel(interaction.client, ticket.channel_id, mentor_id)
-        time_msg = ""
-        if resolved_ticket.created_at and resolved_ticket.resolved_at:
-            minutes = int(
-                (resolved_ticket.resolved_at - resolved_ticket.created_at).total_seconds() / 60
-            )
-            time_msg = f" (resolved in {minutes} min)"
-        try:
-            team_channel = interaction.client.get_channel(ticket.channel_id)
-            if team_channel is None:
-                team_channel = await interaction.client.fetch_channel(ticket.channel_id)
-            await team_channel.send(
-                f"Ticket **{ticket.id}** resolved!{time_msg} Mentor has left — voice room has been "
-                "removed from everyone's sidebar."
-            )
-        except Exception as e:
-            logger.warning("Failed to notify team channel on online resolve {}: {}", ticket_id, e)
+        if ticket_is_team:
+            if mentor_id:
+                await _remove_mentor_from_channel(interaction.client, ticket.channel_id, mentor_id)
+            time_msg = ""
+            if resolved_ticket.created_at and resolved_ticket.resolved_at:
+                minutes = int(
+                    (resolved_ticket.resolved_at - resolved_ticket.created_at).total_seconds() / 60
+                )
+                time_msg = f" (resolved in {minutes} min)"
+            try:
+                team_channel = interaction.client.get_channel(ticket.channel_id)
+                if team_channel is None:
+                    team_channel = await interaction.client.fetch_channel(ticket.channel_id)
+                await team_channel.send(
+                    f"Ticket **{ticket.id}** resolved!{time_msg} Mentor has left — voice room has been "
+                    "removed from everyone's sidebar."
+                )
+            except Exception as e:
+                logger.warning("Failed to notify team channel on online resolve {}: {}", ticket_id, e)
         if prior_room:
             granted = list(resolved_ticket.granted_user_ids)
             resolved_ticket.granted_user_ids = []
