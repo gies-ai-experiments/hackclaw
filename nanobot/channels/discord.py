@@ -800,10 +800,22 @@ class DiscordChannel(BaseChannel):
                 logger.debug("Discord message in {} ignored (bot identity unavailable)", message.channel.id)
                 return False
 
+            # User mention via autocomplete (pings the bot *user*).
             if any(str(user.id) == bot_user_id for user in message.mentions):
                 return True
             if f"<@{bot_user_id}>" in content or f"<@!{bot_user_id}>" in content:
                 return True
+
+            # Role mention — Discord's autocomplete sometimes offers the
+            # bot's managed integration role (same name as the bot) and
+            # users pick that instead of the bot user, producing
+            # `<@&roleid>` syntax. Treat any managed role tied to the
+            # bot's own member as a valid mention.
+            bot_member = message.guild.me if message.guild else None
+            if bot_member is not None and message.role_mentions:
+                bot_role_ids = {str(r.id) for r in getattr(bot_member, "roles", [])}
+                if any(str(r.id) in bot_role_ids for r in message.role_mentions):
+                    return True
 
             logger.debug("Discord message in {} ignored (bot not mentioned)", message.channel.id)
             return False

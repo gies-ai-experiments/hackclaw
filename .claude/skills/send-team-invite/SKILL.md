@@ -19,9 +19,11 @@ Typical prompts that should trigger this skill:
 
 ## The one rule that broke us before
 
-**The running bot reads the invite→role mapping from `/opt/hackclaw/logs/invite-role-map.json`. The `InviteTracker` now reloads this file on every member join (fix commit `960adbb`), so rollout scripts that write straight to the file take effect immediately — no bot restart needed.**
+**The running bot reads the invite→role mapping from `/opt/hackclaw/logs/invite-role-map.json`. The `InviteTracker` now:**
+1. **Reloads this file on every member join** (fix commit `960adbb`) — out-of-process writes take effect without a restart.
+2. **Runs a 15-second background refresh loop** (fix commit `ae29411`) — invites created via the REST API are picked up even when `on_invite_create` gateway events are missed or delayed.
 
-But that fix only works *forward*. If a participant clicks their invite **before the mapping hits disk**, the tracker has nothing to match against, and the member joins with no roles. Order matters:
+But those fixes only work *forward*. If a participant clicks their invite **before the mapping hits disk**, the tracker has nothing to match against, and the member joins with no roles. Order matters:
 
 1. Role created  →
 2. Channel created with role overwrite  →
@@ -115,10 +117,12 @@ After running, verify the participant actually gets their roles on join:
 
 ## What to check if something breaks
 
-- **403 Forbidden when listing invites**: the bot needs the "Manage Server" permission on its role. Verify in Server Settings → Roles → hackclaw.
-- **Invite-create REST call 401**: the bot token env var is wrong. The token lives in `/opt/hackclaw/gateway-env.conf` under `DISCORD_BOT_TOKEN`, NOT `DISCORD_TOKEN`.
-- **Cloudflare 1010 from the Hetzner box**: you're missing the `User-Agent: DiscordBot (...)` header. Always set it.
-- **Participant joined but no roles**: run `tail -n 50 /opt/hackclaw/logs/gateway.log | grep invite_tracker` to see the reason. Most common failure was "invite source couldn't be identified" — fixed by always reloading the mapping from disk on join.
+- **403 Forbidden / error code 50013 when listing invites**: the bot needs the **Manage Server (Manage Guild)** permission on its role. Verify in Server Settings → Roles → hackclaw. Without it, `guild.invites()` returns 403 and the tracker can't diff invite states.
+- **Invite-create REST call 401**: the bot token env var is wrong. The token lives in `/opt/hackclaw/gateway-env.conf` under `DISCORD_BOT_TOKEN`, NOT `DISCORD_TOKEN`. The `config.json` uses a `${DISCORD_TOKEN}` placeholder that OneCLI resolves at runtime — don't read that file directly.
+- **Cloudflare 1010 from the Hetzner box** (happens when calling Discord REST via raw `urllib.request`): you're missing the `User-Agent: DiscordBot (https://..., 0.1)` header. Always set it — Discord's CDN blocks default Python user-agents.
+- **`GUILD_MEMBERS` intent disabled / `on_member_join` silent**: this intent is **privileged** and must be toggled on in the Discord Developer Portal ("Server Members Intent"). No portal toggle → no join events → no auto-role.
+- **Participant joined but no roles**: run `tail -n 50 /opt/hackclaw/logs/gateway.log | grep invite_tracker` to see the reason. If you see "invite source couldn't be identified" on a 1-use invite — Discord deleted the code on use, and the tracker's disappeared-code fallback is now primary (not the uses-counter diff). Should be rare post-`960adbb`/`ae29411`; if it still happens, the 15s refresh loop will usually catch the invite before the click.
+- **Mapping edits not taking effect**: obsolete concern — the tracker reloads the JSON on every join and on the 15s loop. No restart needed.
 
 ## Do NOT
 
