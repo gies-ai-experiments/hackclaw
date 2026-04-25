@@ -30,6 +30,7 @@ from nanobot.agent.tools.admin import (
     SendEmailTool,
     TriggerCycleTool,
 )
+from nanobot.agent.tools.blastpost import BlastPostTool
 from nanobot.agent.tools.message import MessageTool
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.search import GlobTool, GrepTool
@@ -297,6 +298,7 @@ class AgentLoop:
         self.tools.register(ListApplicantsTool())
         self.tools.register(CountApplicantsTool())
         self.tools.register(RunWorkflowTool(registry=self.tools))
+        self.tools.register(BlastPostTool())
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:
             self.tools.register(
@@ -331,6 +333,7 @@ class AgentLoop:
             "message", "spawn", "cron",
             "send_email", "send_discord", "draft_email", "trigger_cycle",
             "list_applicants", "count_applicants", "run_workflow",
+            "blast_post",
         ):
             if tool := self.tools.get(name):
                 if hasattr(tool, "set_context"):
